@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from pathlib import Path
 import yaml
 
 DEFAULT_SUITES_FILE = "eval-sets.yaml"
+PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,14 @@ class EvalSuite:
     tasks: list[EvalTaskSpec]
     args: list[str]
     description: str = ""
+
+
+@dataclass(frozen=True)
+class ModelRouting:
+    target_model: str | None = None
+    target_base_url: str | None = None
+    judge_model: str | None = None
+    judge_base_url: str | None = None
 
 
 def _normalize_remainder_args(args: Sequence[str]) -> list[str]:
@@ -69,6 +79,11 @@ def _parse_task_specs(value: object, *, suite: str) -> list[EvalTaskSpec]:
             task_args = _parse_string_list(
                 item.get("args"), field=f"tasks[{index}].args", suite=suite
             )
+            if "route" in item:
+                raise ValueError(
+                    f"Invalid `tasks[{index}].route` in suite `{suite}`: `route` is no longer supported. "
+                    "Use placeholders in `args` (e.g. `grader_model={{judge_model}}`)."
+                )
         else:
             raise ValueError(
                 f"Invalid `tasks[{index}]` in suite `{suite}`: expected a string or mapping."
@@ -158,22 +173,100 @@ def _load_named_suites(path: str) -> dict[str, EvalSuite]:
     return suites
 
 
-def _run_suite_grouped(
+def _placeholder_values(routing: ModelRouting) -> dict[str, str | None]:
+    return {
+        "target_model": routing.target_model,
+        "target_base_url": routing.target_base_url,
+        "judge_model": routing.judge_model,
+        "judge_base_url": routing.judge_base_url,
+    }
+
+
+def _resolve_placeholders_in_string(
+    value: str,
+    *,
+    routing: ModelRouting,
+    field: str,
+    suite: str,
+) -> str:
+    placeholders = _placeholder_values(routing)
+
+    def replace_match(match: re.Match[str]) -> str:
+        key = match.group(1).strip()
+        if key not in placeholders:
+            allowed = ", ".join(sorted(placeholders.keys()))
+            raise ValueError(
+                f"Invalid placeholder `{{{{{key}}}}}` in `{field}` for suite `{suite}`. "
+                f"Supported placeholders: {allowed}"
+            )
+        resolved = placeholders[key]
+        if resolved is None:
+            option = f"--{key.replace('_', '-')}"
+            raise ValueError(
+                f"Placeholder `{{{{{key}}}}}` in `{field}` for suite `{suite}` requires `{option}`."
+            )
+        return resolved
+
+    return PLACEHOLDER_PATTERN.sub(replace_match, value)
+
+
+def _resolve_placeholders_in_args(
+    values: Sequence[str],
+    *,
+    routing: ModelRouting,
+    field: str,
+    suite: str,
+) -> list[str]:
+    return [
+        _resolve_placeholders_in_string(
+            value,
+            routing=routing,
+            field=f"{field}[{index}]",
+            suite=suite,
+        )
+        for index, value in enumerate(values)
+    ]
+
+
+def _resolve_suite_task_specs(
     suite: EvalSuite,
     *,
+    suite_name: str,
+    routing: ModelRouting,
+) -> list[EvalTaskSpec]:
+    resolved_tasks: list[EvalTaskSpec] = []
+    for index, task in enumerate(suite.tasks):
+        resolved_tasks.append(
+            EvalTaskSpec(
+                name=task.name,
+                args=_resolve_placeholders_in_args(
+                    task.args,
+                    routing=routing,
+                    field=f"tasks[{index}].args",
+                    suite=suite_name,
+                ),
+            )
+        )
+    return resolved_tasks
+
+
+def _run_suite_grouped(
+    task_specs: Sequence[EvalTaskSpec],
+    *,
+    suite_args: Sequence[str],
     mode: str,
     extra_args: Sequence[str],
     prog_name: str = "evals",
 ) -> int:
     eval_command = "eval-set" if mode == "set" else "eval"
     grouped_tasks: dict[tuple[str, ...], list[str]] = {}
-    for task in suite.tasks:
+    for task in task_specs:
         key = tuple(task.args)
         grouped_tasks.setdefault(key, []).append(task.name)
 
     for task_args, task_names in grouped_tasks.items():
         exit_code = _forward_to_inspect(
-            [eval_command, *task_names, *suite.args, *task_args, *extra_args],
+            [eval_command, *task_names, *suite_args, *task_args, *extra_args],
             prog_name=prog_name,
         )
         if exit_code != 0:
@@ -243,6 +336,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="set",
         help="Use `set` (inspect eval-set) or `run` (inspect eval)",
     )
+    suite_parser.add_argument(
+        "--target-model",
+        default=None,
+        help="Value for {{target_model}} placeholders in suite/task args.",
+    )
+    suite_parser.add_argument(
+        "--target-base-url",
+        default=None,
+        help="Value for {{target_base_url}} placeholders in suite/task args.",
+    )
+    suite_parser.add_argument(
+        "--judge-model",
+        default=None,
+        help="Value for {{judge_model}} placeholders in suite/task args.",
+    )
+    suite_parser.add_argument(
+        "--judge-base-url",
+        default=None,
+        help="Value for {{judge_base_url}} placeholders in suite/task args.",
+    )
     suites_parser = subparsers.add_parser(
         "suites",
         help="List named eval suites from a config file",
@@ -298,18 +411,36 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(f"unrecognized arguments: {' '.join(passthrough_args)}")
 
         extra_args = _normalize_remainder_args(passthrough_args)
-        task_names = [task.name for task in suite.tasks]
-        has_per_task_args = any(len(task.args) > 0 for task in suite.tasks)
+        routing = ModelRouting(
+            target_model=args.target_model,
+            target_base_url=args.target_base_url,
+            judge_model=args.judge_model,
+            judge_base_url=args.judge_base_url,
+        )
+        resolved_suite_args = _resolve_placeholders_in_args(
+            suite.args,
+            routing=routing,
+            field="args",
+            suite=args.name,
+        )
+        resolved_tasks = _resolve_suite_task_specs(
+            suite,
+            suite_name=args.name,
+            routing=routing,
+        )
+        task_names = [task.name for task in resolved_tasks]
+        has_per_task_args = any(len(task.args) > 0 for task in resolved_tasks)
 
         if not has_per_task_args:
             eval_command = "eval-set" if args.mode == "set" else "eval"
             return _forward_to_inspect(
-                [eval_command, *task_names, *suite.args, *extra_args],
+                [eval_command, *task_names, *resolved_suite_args, *extra_args],
                 prog_name="evals",
             )
 
         return _run_suite_grouped(
-            suite,
+            resolved_tasks,
+            suite_args=resolved_suite_args,
             mode=args.mode,
             extra_args=extra_args,
             prog_name="evals",

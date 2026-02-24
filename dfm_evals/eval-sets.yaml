@@ -1,1 +1,69 @@
-sets: {}
+sets:
+  agentic:
+    description: Agentic suite
+    tasks:
+      - name: inspect_evals/agentharm
+        args:
+          - -T
+          - refusal_judge={{judge_model}}
+          - -T
+          - semantic_judge={{judge_model}}
+      - name: inspect_evals/agentharm_benign
+        args:
+          - -T
+          - refusal_judge={{judge_model}}
+          - -T
+          - semantic_judge={{judge_model}}
+      - name: inspect_evals/gaia_level1
+      - name: inspect_evals/agentdojo
+        args:
+          - -T
+          - with_sandbox_tasks=no
+          - -T
+          - workspace=banking
+      - name: inspect_evals/browse_comp
+        args:
+          - -T
+          - with_browsing=true
+      - name: inspect_evals/terminal_bench_2
+        args:
+          - -T
+          - use_prebuilt_image=true
+      - name: inspect_evals/swe_bench_verified_mini
+        args:
+          - -T
+          - build_docker_images=false
+      - name: inspect_evals/osworld_small
+        args:
+          - -T
+          - include_connected=false
+    args:
+      - --model
+      - "{{target_model}}"
+      - --limit
+      - "5"
+      - --temperature
+      - "0"
+  fundamentals:
+    description: Broad inspect_evals fundamentals set
+    tasks:
+      - inspect_evals/gpqa_diamond
+      - inspect_evals/gsm8k
+      - inspect_evals/math
+      - inspect_evals/humaneval
+      - inspect_evals/mbpp
+      - inspect_evals/ifeval
+      - inspect_evals/truthfulqa
+      - name: inspect_evals/simpleqa_verified
+        args:
+          - -T
+          - grader_model={{judge_model}}
+      - dfm_evals/multi_wiki_qa
+      - dfm_evals/bfcl-v1
+    args:
+      - --model
+      - "{{target_model}}"
+      - --limit
+      - "100"
+      - --temperature
+      - "0"
