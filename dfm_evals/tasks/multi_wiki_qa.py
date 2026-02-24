@@ -50,7 +50,7 @@ _ARTICLES = re.compile(r"\b(a|an|the)\b", re.UNICODE)
 _PUNCTUATION = set(string.punctuation)
 
 
-@task(name="dfm_evals/multi_wiki_qa")
+@task(name="multi_wiki_qa")
 def multi_wiki_qa(
     language: str = DEFAULT_LANGUAGE,
     split: str = DEFAULT_SPLIT,

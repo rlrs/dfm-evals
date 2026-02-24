@@ -10,7 +10,6 @@ from pathlib import Path
 import yaml
 
 DEFAULT_SUITES_FILE = "eval-sets.yaml"
-LOCAL_TASK_PREFIX = "dfm_evals/"
 
 
 @dataclass(frozen=True)
@@ -213,15 +212,7 @@ def _list_registered_tasks(prefix: str) -> list[str]:
         lambda info: info.type == "task" and info.name.startswith(prefix)
     )
     names = {registry_info(task).name for task in registered}
-
-    # When installed as an Inspect plugin, registry name-prefixing can surface
-    # as `dfm_evals/dfm_evals/...`. Normalize to a single package prefix.
-    double_prefix = f"{LOCAL_TASK_PREFIX}{LOCAL_TASK_PREFIX}"
-    normalized_names = {
-        (f"{LOCAL_TASK_PREFIX}{name[len(double_prefix):]}" if name.startswith(double_prefix) else name)
-        for name in names
-    }
-    return sorted(normalized_names)
+    return sorted(names)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
