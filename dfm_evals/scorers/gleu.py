@@ -4,7 +4,6 @@ from collections.abc import Callable
 from inspect_ai.scorer import Score, Scorer, Target, mean, scorer, stderr
 from inspect_ai.solver import TaskState
 
-
 Tokenize = Callable[[str], list[str]]
 
 

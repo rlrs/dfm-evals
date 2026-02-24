@@ -23,6 +23,12 @@ uv run evals suite multi-wiki-qa-smoke -- --model openai/gpt-4o-mini
 Suites default to the packaged file at `dfm_evals/eval-sets.yaml`.
 Use `--file <path>` for custom suite files.
 
+## Lint
+
+```bash
+uv run --group dev ruff check dfm_evals
+```
+
 ## Task layout
 
 Local tasks live under `dfm_evals/tasks/`.

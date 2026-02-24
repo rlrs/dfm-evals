@@ -184,7 +184,7 @@ def _run_suite_grouped(
 
 def _forward_to_inspect(args: Sequence[str], *, prog_name: str = "evals") -> int:
     # Ensure local task registry is loaded.
-    import dfm_evals._registry  # noqa: F401
+    import dfm_evals._registry  # noqa: F401, I001
     from inspect_ai._cli.main import inspect as inspect_command
 
     forwarded = _normalize_remainder_args(args)
@@ -206,7 +206,7 @@ def _forward_to_inspect(args: Sequence[str], *, prog_name: str = "evals") -> int
 
 def _list_registered_tasks(prefix: str) -> list[str]:
     # Ensure local registry module is imported so task registration executes.
-    import dfm_evals._registry  # noqa: F401
+    import dfm_evals._registry  # noqa: F401, I001
     from inspect_ai._util.registry import registry_find, registry_info
 
     registered = registry_find(
