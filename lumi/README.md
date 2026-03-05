@@ -12,7 +12,7 @@ instead of relying on Inspect self-spawn.
 - `lumi/euroeval_submit.sh`: submit 2-node vLLM + EuroEval jobs.
 - `lumi/run_euroeval.sbatch`: 2-node vLLM MP launcher with optional EuroEval.
 - `lumi/view.sh`: inspect-view helper (default log root: `logs/evals-logs`).
-- `lumi/results_table.sh`: aggregate `.eval` metrics into terminal table/CSV/JSON.
+- `lumi/results_table.sh`: aggregate Every Eval Ever metrics into terminal table/CSV/JSON.
 
 ## Quick Start
 
@@ -188,13 +188,13 @@ Common examples:
 When set to `auto` (default), Qwen3/Qwen3.5 models are auto-resolved to
 `reasoning` to avoid short non-reasoning token budgets truncating outputs.
 
-EuroEval artifacts are written under overlay paths from `run_euroeval.sbatch`, by default:
+EuroEval artifacts are written to these default paths from `run_euroeval.sbatch`:
 
 - `/overlay/euroeval-cache-<job_id>`
 - `/overlay/euroeval-runs/<job_id>/euroeval_benchmark_results.jsonl`
-- `/overlay/euroeval-runs/<job_id>/every_eval_ever/` (converted EEE aggregate JSON)
+- `<REPO_ROOT>/logs/every_eval_ever/data/` (shared converted EEE data root)
 
-These `/overlay/...` paths are container paths bind-mounted from host `OVERLAY_DIR`.
+The `/overlay/...` paths are container paths bind-mounted from host `OVERLAY_DIR`.
 
 EEE export is enabled by default in both launchers:
 
@@ -202,6 +202,9 @@ EEE export is enabled by default in both launchers:
 - `EUROEVAL_EXPORT_EEE=1` in `run_euroeval.sbatch`
 
 Set either to `0` to disable conversion for a run.
+
+When available, launcher-known inference endpoints are written to EEE metadata
+(`generation_config.additional_details.inference_base_url` and `inference_host`).
 
 ## Inspect View
 
@@ -217,15 +220,13 @@ By default, `view.sh` reads from `logs/evals-logs/`.
 
 ```bash
 ./lumi/results_table.sh --latest
-./lumi/results_table.sh --run-label external_suite_l100_hc
 ./lumi/results_table.sh --compare-models --all-runs
 ./lumi/results_table.sh --compare-models --all-runs --task-rows
-./lumi/results_table.sh --run-label external_suite_l100_hc --format csv
 ./lumi/results_table.sh --compare-models --all-runs --all-metrics --format csv
 ```
 
-`results_table.sh` reads zipped `.eval` files, extracts `header.json`, and prints
-task/scorer/metric aggregates. Use `--compare-models` for model-vs-task tables
+`results_table.sh` reads EEE `.json` records under `logs/every_eval_ever/data/`
+and prints task/scorer/metric aggregates. Use `--compare-models` for model-vs-task tables
 (default orientation: model rows, task columns; use `--task-rows` for the old layout).
 
 ## Log Locations
@@ -235,7 +236,7 @@ Default eval artifact roots:
 - `logs/evals-runs/<run_label>`
 - `logs/evals-logs/<run_label>`
 - `logs/evals-logs/<run_label>/_vllm_server` (launcher-managed vLLM raw logs)
-- `logs/evals-runs/<run_label>/every_eval_ever/` (converted EEE JSON + Inspect instance-level JSONL)
+- `logs/every_eval_ever/data/` (shared converted EEE JSON + Inspect instance-level JSONL)
 
 Overlay still holds runtime environment assets (`venv`, source checkouts, cache).
 
@@ -255,7 +256,9 @@ Override with:
 
 - `--slurm-log-dir <path>` on `lumi/submit.sh`
 - `--slurm-log-dir <path>` on `lumi/euroeval_submit.sh`
+- `--eee-output-dir <path>` on `lumi/submit.sh` or `lumi/euroeval_submit.sh`
 - or `SLURM_LOG_DIR=<path>` in the environment
+- or `DFM_EVALS_EEE_OUTPUT_DIR=<path>` / `EUROEVAL_EEE_OUTPUT_DIR=<path>` in the environment
 
 ## Overlay vLLM Patches
 
@@ -355,7 +358,7 @@ EuroEval success checks:
 ```bash
 grep -E 'Server ready|EuroEval complete' logs/slurm/euroeval__*.out
 ls /pfs/lustrep4/scratch/project_465002183/rasmus/vllm-lumi/overlay_vllm_minimal/euroeval-runs/<job_id>/euroeval_benchmark_results.jsonl
-ls /pfs/lustrep4/scratch/project_465002183/rasmus/vllm-lumi/overlay_vllm_minimal/euroeval-runs/<job_id>/every_eval_ever/
+ls logs/every_eval_ever/data/
 ```
 
 `sacct` may show the `.0` step as cancelled during scripted shutdown while the top-level job is still `COMPLETED`; use the top-level job state/exit code as the source of truth.

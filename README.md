@@ -27,12 +27,14 @@ Quick notes:
   `logs/slurm/`
 - Inspect eval logs:
   `logs/evals-logs/<run_label>/`
+- Every Eval Ever shared data root (standard `data/<benchmark>/<developer>/<model>/` layout):
+  `logs/every_eval_ever/data/`
 - Inspect results in Every Eval Ever format:
-  `logs/evals-runs/<run_label>/every_eval_ever/` (`.json` aggregate + `.jsonl` instance-level)
+  under `logs/every_eval_ever/data/` (`.json` aggregate + `.jsonl` instance-level)
 - EuroEval results:
   `<OVERLAY_DIR>/euroeval-runs/<job_id>/euroeval_benchmark_results.jsonl`
 - EuroEval results in Every Eval Ever format:
-  `<OVERLAY_DIR>/euroeval-runs/<job_id>/every_eval_ever/` (`.json` aggregate)
+  under `logs/every_eval_ever/data/` (`.json` aggregate)
 - For `openai/*` models, set both:
   `OPENAI_API_KEY` and `OPENAI_BASE_URL`.
 
@@ -49,8 +51,10 @@ uv run evals tasks
 uv run evals run dfm_evals/multi_wiki_qa --model openai/gpt-5-mini
 uv run evals run dfm_evals/bfcl-v1 --model openai/gpt-5-mini
 uv run evals run dfm_evals/ifeval-da --model openai/gpt-5-mini
-uv run evals eee inspect --log-path logs/evals-logs/<run_label> --output-dir out/eee
-uv run evals eee euroeval --results-file /path/to/euroeval_benchmark_results.jsonl --output-dir out/eee
+uv run evals eee inspect --log-path logs/evals-logs/<run_label> --output-dir out/eee/data
+uv run evals eee euroeval --results-file /path/to/euroeval_benchmark_results.jsonl --output-dir out/eee/data
+# Optional: record inference endpoint/provider context
+uv run evals eee inspect --log-path logs/evals-logs/<run_label> --output-dir out/eee/data --inference-base-url https://inference.example/v1 --inference-provider-name my-provider
 ```
 
 Prime Sandbox provider (Inspect `--sandbox prime`):
