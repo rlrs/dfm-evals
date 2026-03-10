@@ -407,6 +407,47 @@ if [[ -z "$DFM_EVALS_EEE_OUTPUT_DIR" ]]; then
   DFM_EVALS_EEE_OUTPUT_DIR="${REPO_ROOT}/logs/every_eval_ever/data"
 fi
 
+build_model_info_overrides() {
+  local -n out_json_ref=$1
+  out_json_ref="$(
+    DFM_EVALS_MODEL="$DFM_EVALS_MODEL" \
+    DFM_EVALS_TARGET_MODEL="$DFM_EVALS_TARGET_MODEL" \
+    DFM_EVALS_JUDGE_MODEL="$DFM_EVALS_JUDGE_MODEL" \
+    CTX="$CTX" \
+    JUDGE_CTX="$JUDGE_CTX" \
+    python3 - <<'PY'
+import json
+import os
+
+overrides: dict[str, dict[str, int]] = {}
+
+
+def maybe_add(model_env: str, ctx_env: str) -> None:
+    model_name = os.environ.get(model_env, "").strip()
+    ctx = os.environ.get(ctx_env, "").strip()
+    if not model_name or not ctx or not model_name.startswith("vllm/"):
+        return
+
+    try:
+        context_length = int(ctx)
+    except ValueError as exc:
+        raise SystemExit(f"{ctx_env} must be an integer (got {ctx!r})") from exc
+
+    if context_length <= 0:
+        raise SystemExit(f"{ctx_env} must be positive (got {context_length})")
+
+    overrides[model_name] = {"context_length": context_length}
+
+
+maybe_add("DFM_EVALS_MODEL", "CTX")
+maybe_add("DFM_EVALS_TARGET_MODEL", "CTX")
+maybe_add("DFM_EVALS_JUDGE_MODEL", "JUDGE_CTX")
+
+print(json.dumps(overrides, separators=(",", ":")))
+PY
+  )"
+}
+
 build_evals_cli() {
   local -n out_cmd_ref=$1
   local -a evals_args
@@ -699,6 +740,8 @@ fi
 
 EVALS_CMD=""
 build_evals_cli EVALS_CMD
+DFM_EVALS_MODEL_INFO_OVERRIDES=""
+build_model_info_overrides DFM_EVALS_MODEL_INFO_OVERRIDES
 
 printf -v DFM_EVALS_CACHE_DIR_Q '%q' "$DFM_EVALS_CACHE_DIR"
 printf -v DFM_EVALS_RUN_DIR_Q '%q' "$DFM_EVALS_RUN_DIR"
@@ -707,6 +750,11 @@ printf -v TARGET_VLLM_URL_Q '%q' "${TARGET_VLLM_URL:-}"
 printf -v TARGET_SERVER_API_KEY_Q '%q' "${TARGET_SERVER_API_KEY:-}"
 printf -v OPENAI_BASE_URL_Q '%q' "${OPENAI_BASE_URL:-}"
 printf -v OPENAI_API_KEY_Q '%q' "${OPENAI_API_KEY:-}"
+MODEL_INFO_EXPORT_CMD=""
+if [[ -n "$DFM_EVALS_MODEL_INFO_OVERRIDES" && "$DFM_EVALS_MODEL_INFO_OVERRIDES" != "{}" ]]; then
+  printf -v DFM_EVALS_MODEL_INFO_OVERRIDES_Q '%q' "$DFM_EVALS_MODEL_INFO_OVERRIDES"
+  MODEL_INFO_EXPORT_CMD="export DFM_EVALS_MODEL_INFO_OVERRIDES=${DFM_EVALS_MODEL_INFO_OVERRIDES_Q}"
+fi
 
 RUN_CMD="$(render_env)
 export XDG_CACHE_HOME=${DFM_EVALS_CACHE_DIR_Q}
@@ -721,6 +769,7 @@ if [[ -n ${OPENAI_BASE_URL_Q} ]]; then
   export OPENAI_BASE_URL=${OPENAI_BASE_URL_Q}
   export OPENAI_API_KEY=${OPENAI_API_KEY_Q}
 fi
+${MODEL_INFO_EXPORT_CMD}
 cd ${DFM_EVALS_RUN_DIR_Q}
 command -v evals >/dev/null 2>&1 || { echo 'FATAL: evals not installed in overlay venv'; exit 1; }
 ${EVALS_CMD}"
@@ -785,6 +834,9 @@ echo "Log dir: $DFM_EVALS_LOG_DIR"
 echo "vLLM server log dir: $DFM_EVALS_SERVER_LOG_DIR"
 echo "OpenAI base URL: ${OPENAI_BASE_URL:-<unset>}"
 echo "Target server log: $TARGET_SERVER_LOG"
+if [[ -n "$DFM_EVALS_MODEL_INFO_OVERRIDES" && "$DFM_EVALS_MODEL_INFO_OVERRIDES" != "{}" ]]; then
+  echo "Model info overrides: $DFM_EVALS_MODEL_INFO_OVERRIDES"
+fi
 if [[ "$JUDGE_SERVER_ENABLED" == "1" ]]; then
   echo "Judge server log: $JUDGE_SERVER_LOG"
 fi

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import json
+import os
 import re
 import sys
 from collections.abc import Sequence
@@ -12,6 +15,12 @@ import yaml
 
 DEFAULT_SUITES_FILE = "eval-sets.yaml"
 PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
+OPTIONAL_REGISTRY_MODULES = (
+    "inspect_sandboxes._registry",
+    "inspect_harbor._registry",
+)
+
+
 @dataclass(frozen=True)
 class EvalTaskSpec:
     name: str
@@ -31,6 +40,109 @@ class ModelRouting:
     target_base_url: str | None = None
     judge_model: str | None = None
     judge_base_url: str | None = None
+
+
+def _is_missing_optional_module(exc: ModuleNotFoundError, module_name: str) -> bool:
+    parts = module_name.split(".")
+    acceptable_names = {".".join(parts[:index]) for index in range(1, len(parts) + 1)}
+    return exc.name in acceptable_names
+
+
+def _import_registry_module(module_name: str, *, required: bool) -> None:
+    try:
+        importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if required or not _is_missing_optional_module(exc, module_name):
+            raise
+
+
+def _ensure_registry_modules_loaded() -> None:
+    _import_registry_module("dfm_evals._registry", required=True)
+    for module_name in OPTIONAL_REGISTRY_MODULES:
+        _import_registry_module(module_name, required=False)
+
+
+def _load_model_info_overrides() -> dict[str, dict[str, object]]:
+    raw_overrides = os.environ.get("DFM_EVALS_MODEL_INFO_OVERRIDES", "").strip()
+    if not raw_overrides:
+        return {}
+
+    try:
+        payload = json.loads(raw_overrides)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Invalid DFM_EVALS_MODEL_INFO_OVERRIDES: {exc.msg}"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            "Invalid DFM_EVALS_MODEL_INFO_OVERRIDES: expected a JSON object."
+        )
+
+    overrides: dict[str, dict[str, object]] = {}
+    for model_name, raw_info in payload.items():
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise ValueError(
+                "Invalid DFM_EVALS_MODEL_INFO_OVERRIDES: model names must be non-empty strings."
+            )
+
+        if isinstance(raw_info, int):
+            context_length = raw_info
+            output_tokens: int | None = None
+            display_name: str | None = None
+            organization: str | None = None
+        elif isinstance(raw_info, dict):
+            raw_context_length = raw_info.get("context_length", raw_info.get("input_tokens"))
+            context_length = (
+                raw_context_length if isinstance(raw_context_length, int) else None
+            )
+            raw_output_tokens = raw_info.get("output_tokens")
+            output_tokens = (
+                raw_output_tokens if isinstance(raw_output_tokens, int) else None
+            )
+            raw_display_name = raw_info.get("display_name")
+            display_name = (
+                raw_display_name.strip()
+                if isinstance(raw_display_name, str) and raw_display_name.strip()
+                else None
+            )
+            raw_organization = raw_info.get("organization")
+            organization = (
+                raw_organization.strip()
+                if isinstance(raw_organization, str) and raw_organization.strip()
+                else None
+            )
+        else:
+            raise ValueError(
+                "Invalid DFM_EVALS_MODEL_INFO_OVERRIDES: each value must be an integer or object."
+            )
+
+        if context_length is None or context_length <= 0:
+            raise ValueError(
+                "Invalid DFM_EVALS_MODEL_INFO_OVERRIDES: `context_length` must be a positive integer."
+            )
+
+        info: dict[str, object] = {"context_length": context_length}
+        if output_tokens is not None:
+            info["output_tokens"] = output_tokens
+        if display_name is not None:
+            info["model"] = display_name
+        if organization is not None:
+            info["organization"] = organization
+        overrides[model_name.strip()] = info
+
+    return overrides
+
+
+def _apply_model_info_overrides() -> None:
+    overrides = _load_model_info_overrides()
+    if len(overrides) == 0:
+        return
+
+    from inspect_ai.model import ModelInfo, set_model_info
+
+    for model_name, info_kwargs in overrides.items():
+        set_model_info(model_name, ModelInfo(**info_kwargs))
 
 
 def _normalize_remainder_args(args: Sequence[str]) -> list[str]:
@@ -273,8 +385,9 @@ def _run_suite_grouped(
 
 
 def _forward_to_inspect(args: Sequence[str], *, prog_name: str = "evals") -> int:
-    # Ensure local task registry is loaded.
-    import dfm_evals._registry  # noqa: F401, I001
+    # Ensure local and optional third-party task registries are loaded.
+    _ensure_registry_modules_loaded()
+    _apply_model_info_overrides()
     from inspect_ai._cli.main import inspect as inspect_command
 
     forwarded = _normalize_remainder_args(args)
@@ -295,8 +408,9 @@ def _forward_to_inspect(args: Sequence[str], *, prog_name: str = "evals") -> int
 
 
 def _list_registered_tasks(prefix: str) -> list[str]:
-    # Ensure local registry module is imported so task registration executes.
-    import dfm_evals._registry  # noqa: F401, I001
+    # Ensure local and optional third-party registries are imported so task
+    # registration executes before querying the registry.
+    _ensure_registry_modules_loaded()
     from inspect_ai._util.registry import registry_find, registry_info
 
     registered = registry_find(

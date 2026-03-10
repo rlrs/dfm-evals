@@ -35,6 +35,30 @@ EOF
 ./lumi/submit.sh --limit 100
 ```
 
+## Update `dfm-evals` In The Overlay
+
+When you change this checkout and want LUMI jobs to pick it up, reinstall the
+repo inside the overlay venv before submitting. Use the helper script:
+
+```bash
+./lumi/install_overlay_dfm_evals.sh --extras harbor,sandboxes
+```
+
+Notes:
+
+- For later code-only updates, `./lumi/install_overlay_dfm_evals.sh` is enough.
+  That defaults to `pip install -e . --no-deps`.
+- Use `--extras harbor,sandboxes` when you need `inspect_harbor` and
+  `inspect_sandboxes` present in the overlay. That resolves dependencies.
+- Do not run `<OVERLAY_DIR>/venv/vllm-min/bin/pip` directly from the host. The
+  wrapper points at `/overlay/...` and only works from inside the container.
+- The helper binds the repo into the container at the same absolute path the
+  Slurm jobs use (`-B "$REPO_ROOT:$REPO_ROOT"`). That matters for editable
+  installs: the old `/workspace` pattern is wrong because job containers do not
+  mount the repo there.
+- `lumi/submit.sh` expects `evals` to already be installed in the overlay venv;
+  it does not reinstall this repo automatically on job start.
+
 ## Recommended Commands
 
 Inspect smoke (fast validation, externally managed target vLLM):
@@ -466,6 +490,10 @@ ls logs/every_eval_ever/data/
 
 - `overlay dir not found`: set `OVERLAY_DIR` explicitly to your existing overlay location.
 - `openai/*` fails fast: set both `OPENAI_API_KEY` and `OPENAI_BASE_URL` (or pass `--openai-base-url`).
+- `inspect_harbor/*` tasks fail on the current LUMI/Prime path: Harbor emits Docker/Compose sandbox specs, and this repo's built-in `prime` backend does not translate them. Use a Docker-capable runtime or a compose-aware provider such as `inspect_sandboxes` `modal` outside the current LUMI launcher flow.
+- The packaged `openthoughts_tblite` suite now runs Harbor with `--no-fail-on-error --continue-on-fail`, so a single bad sample does not abort the full eval.
+- Harbor sample parallelism follows `--max-connections` unless you explicitly pass `--max-samples`; a smoke run with `--max-connections 1` is intentionally single-sample-at-a-time.
+- The LUMI launcher now exports model-info overrides for custom `vllm/*` served names, so Inspect compaction uses the actual `--ctx` value instead of falling back to `128000`.
 - vLLM startup fails with low free GPU memory: lower `GPU_MEM`, reduce `TP/PP`, or retry on a cleaner node allocation.
 - `view.sh list` shows no runs: new default root is `logs/evals-logs`; for older overlay runs, use `EVAL_LOG_ROOT_HOST=<overlay>/dfm-evals-logs ./lumi/view.sh list`.
 - Wrong EuroEval model due inherited env: pass `--euroeval-model` explicitly (recommended for reproducibility).

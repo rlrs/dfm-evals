@@ -44,6 +44,22 @@ Quick notes:
 uv sync
 ```
 
+Harbor-backed tasks such as `inspect_harbor/openthoughts_tblite` require
+Python 3.12 because `inspect-harbor` does. Install the optional extra in a
+3.12 environment:
+
+```bash
+uv sync --extra harbor
+```
+
+Compose-aware cloud sandboxes such as Modal and Daytona are provided via
+`inspect_sandboxes`, not by `dfm_evals` itself. That package is also Python
+3.12-only:
+
+```bash
+uv sync --extra sandboxes
+```
+
 ## CLI
 
 ```bash
@@ -100,36 +116,32 @@ Cleanup stale Inspect-created Prime sandboxes:
 uv run inspect sandbox cleanup prime
 ```
 
-Modal Sandbox provider (Inspect `--sandbox modal`):
+Modal Sandbox provider (via `inspect_sandboxes`, Inspect `--sandbox modal`):
 
 ```bash
+uv sync --extra sandboxes
 MODAL_TOKEN_ID=... MODAL_TOKEN_SECRET=... \
 uv run evals run dfm_evals/multi_wiki_qa \
   --model openai/gpt-5-mini \
   --sandbox modal
 ```
 
-With explicit config file:
+With explicit Dockerfile:
 
 ```bash
 MODAL_TOKEN_ID=... MODAL_TOKEN_SECRET=... \
 uv run evals run dfm_evals/multi_wiki_qa \
   --model openai/gpt-5-mini \
-  --sandbox "modal:$(pwd)/modal-sandbox.yaml"
+  --sandbox "modal:$(pwd)/Dockerfile"
 ```
 
-Example `modal-sandbox.yaml`:
+With explicit Compose file:
 
-```yaml
-app_name: inspect-sandboxes
-image: python:3.11-slim
-startup_command: tail -f /dev/null
-working_dir: /workspace
-cpu_cores: 1
-memory_mb: 2048
-timeout_seconds: 3600
-wait_for_start: true
-wait_timeout_seconds: 900
+```bash
+MODAL_TOKEN_ID=... MODAL_TOKEN_SECRET=... \
+uv run evals run dfm_evals/multi_wiki_qa \
+  --model openai/gpt-5-mini \
+  --sandbox "modal:$(pwd)/compose.yaml"
 ```
 
 Cleanup stale Inspect-created Modal sandboxes:
@@ -166,6 +178,24 @@ uv run evals suite fundamentals \
   --target-model openai/gemma3-4b-hermes \
   --judge-model openai/gemma3-4b-hermes
 ```
+
+OpenThoughts-TBLite via `inspect-harbor`:
+
+```bash
+uv sync --extra harbor --extra sandboxes
+uv run evals suite openthoughts_tblite \
+  --target-model openai/gpt-5-mini \
+  -- -T sandbox_env_name=modal
+```
+
+The packaged Harbor suite defaults to `--no-fail-on-error --continue-on-fail`
+so sample-level agent failures such as bad tool loops or context exhaustion are
+recorded without aborting the full dataset run.
+
+Harbor emits Inspect `ComposeConfig` sandbox specs from the task `Dockerfile` /
+`docker-compose.yaml`. This repo's built-in `prime` sandbox does not translate
+those compose specs. For Harbor tasks, use the standard Docker sandbox or a
+compose-aware provider from `inspect_sandboxes` such as `modal`.
 
 Suites use placeholders in `args`, for example:
 

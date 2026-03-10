@@ -62,3 +62,16 @@ sets:
       - "100"
       - --temperature
       - "0"
+  openthoughts_tblite:
+    description: inspect_harbor OpenThoughts-TBLite suite (requires inspect-harbor; sample failures are logged without aborting the full eval)
+    tasks:
+      - inspect_harbor/openthoughts_tblite
+    args:
+      - --model
+      - "{{target_model}}"
+      - --no-fail-on-error
+      - --continue-on-fail
+      - --limit
+      - "100"
+      - --temperature
+      - "0"
