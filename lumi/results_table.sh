@@ -9,7 +9,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 EEE_DATA_ROOT_HOST=${EEE_DATA_ROOT_HOST:-$REPO_ROOT/logs/every_eval_ever/data}
 LATEST_WINDOW_SECONDS=${LATEST_WINDOW_SECONDS:-120}
-RESULTS_TABLE_WIDTH=${RESULTS_TABLE_WIDTH:-160}
+RESULTS_TABLE_WIDTH=${RESULTS_TABLE_WIDTH:-140}
 
 SELECTOR="latest"
 SELECTOR_SET=0
@@ -45,7 +45,7 @@ View options:
 Environment overrides:
   EEE_DATA_ROOT_HOST     Host EEE data root (default: ./logs/every_eval_ever/data)
   LATEST_WINDOW_SECONDS  Window for --latest selection by file mtime (default: 120)
-  RESULTS_TABLE_WIDTH    Preferred rich table width for --format table (default: 160)
+  RESULTS_TABLE_WIDTH    Preferred rich table width for --format table (default: 140)
 
 Examples:
   ./lumi/results_table.sh --latest
@@ -243,9 +243,9 @@ try:
 
     HAVE_RICH = True
     try:
-        rich_width = int(os.environ.get("RESULTS_TABLE_WIDTH", "160"))
+        rich_width = int(os.environ.get("RESULTS_TABLE_WIDTH", "140"))
     except Exception:
-        rich_width = 160
+        rich_width = 140
     if rich_width < 80:
         rich_width = 80
     RICH_CONSOLE = Console(highlight=False, width=rich_width)
@@ -351,8 +351,61 @@ def value_text(value):
     if value is None:
         return "-"
     if isinstance(value, (int, float)):
-        return f"{value:.4f}"
+        return f"{value:.2f}"
     return str(value)
+
+
+def compact_label(value: str, max_len: int = 10) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+
+    for sep in ("/", ":", "|"):
+        if sep in text:
+            text = text.split(sep)[-1]
+
+    text = text.replace("__", "_").replace("-", "_")
+    tokens = [token for token in text.split("_") if token]
+    if not tokens:
+        return trim(text, max_len)
+
+    if len(tokens) == 1:
+        base = tokens[0]
+    elif len(tokens[0]) >= max_len - 2:
+        base = tokens[0]
+    elif len(tokens) == 2:
+        candidate = f"{tokens[0]}_{tokens[1]}"
+        if len(candidate) <= max_len:
+            base = candidate
+        else:
+            base = tokens[0]
+    else:
+        # Keep first token and initials from the rest.
+        initials = "".join(token[0] for token in tokens[1:] if token)
+        candidate = f"{tokens[0]}_{initials}" if initials else tokens[0]
+        if len(candidate) <= max_len:
+            base = candidate
+        else:
+            base = tokens[0]
+
+    return base if len(base) <= max_len else base[:max_len]
+
+
+def unique_compact_labels(values: list[str], max_len: int) -> list[str]:
+    used: set[str] = set()
+    labels: list[str] = []
+    for value in values:
+        base = compact_label(value, max_len=max_len)
+        label = base
+        suffix = 2
+        while label in used:
+            tail = str(suffix)
+            keep = max(1, max_len - len(tail))
+            label = f"{base[:keep]}{tail}"
+            suffix += 1
+        used.add(label)
+        labels.append(label)
+    return labels
 
 
 def trim(text: str, width: int) -> str:
@@ -369,6 +422,8 @@ def row_from_eval_result(record, eval_result, path, file_ts):
     model_info = record.get("model_info") or {}
     score_details = eval_result.get("score_details") or {}
     details = score_details.get("details") or {}
+    source_data = eval_result.get("source_data") or {}
+    source_data_details = source_data.get("additional_details") or {}
     metric_config = eval_result.get("metric_config") or {}
     uncertainty = score_details.get("uncertainty") or {}
 
@@ -390,6 +445,16 @@ def row_from_eval_result(record, eval_result, path, file_ts):
             metric = parts[-1]
         else:
             metric = metric_config.get("evaluation_description") or "-"
+
+    # EuroEval exports should be grouped by dataset in the task column.
+    # Older exports may encode the coarse task-group (e.g. "knowledge") in
+    # details.task while source_data carries the concrete dataset name.
+    if str(source_metadata.get("source_name") or "") == "euroeval":
+        dataset_name = source_data.get("dataset_name")
+        if dataset_name:
+            task = dataset_name
+        if not scorer or scorer == "-":
+            scorer = details.get("scorer") or source_data_details.get("task") or scorer
 
     ts = (
         parse_ts(eval_result.get("evaluation_timestamp"))
@@ -505,14 +570,14 @@ if not compare_models:
         raise SystemExit(0)
 
     columns = [
-        ("run", "Run", 24, "left"),
-        ("task", "Task", 24, "left"),
-        ("scorer", "Scorer", 20, "left"),
-        ("metric", "Metric", 24, "left"),
-        ("value", "Value", 10, "right"),
-        ("n", "N", 8, "right"),
-        ("total", "Total", 8, "right"),
-        ("model", "Model", 56, "left"),
+        ("run", "Run", 14, "left"),
+        ("task", "Task", 16, "left"),
+        ("scorer", "Scorer", 14, "left"),
+        ("metric", "Metric", 16, "left"),
+        ("value", "Value", 6, "right"),
+        ("n", "N", 4, "right"),
+        ("total", "Total", 5, "right"),
+        ("model", "Model", 58, "left"),
     ]
     display_rows = []
     for row in rows:
@@ -621,20 +686,20 @@ if orientation == "task-rows":
         raise SystemExit(0)
 
     columns = [
-        ("task", "Task", 24, "left"),
-        ("metric", "Metric", 20, "left"),
-        ("scorer", "Scorer", 20, "left"),
+        ("task", "Task", 14, "left"),
+        ("metric", "Metric", 12, "left"),
+        ("scorer", "Scorer", 12, "left"),
     ]
     model_labels = unique_model_labels(models)
     for model in models:
-        columns.append((model, model_labels[model], 28, "right"))
+        columns.append((model, model_labels[model], 20, "right"))
 
     display_rows = []
     for row in table_rows:
         out = {
-            "task": row.get("task", "-"),
-            "metric": row.get("metric", "-"),
-            "scorer": row.get("scorer", "-"),
+            "task": compact_label(row.get("task", "-"), 14),
+            "metric": compact_label(row.get("metric", "-"), 12),
+            "scorer": compact_label(row.get("scorer", "-"), 12),
         }
         for model in models:
             out[model] = value_text(row.get(model))
@@ -684,9 +749,10 @@ if fmt == "csv":
     raise SystemExit(0)
 
 model_labels = unique_model_labels(models)
-columns = [("model", "Model", 56, "left")]
-for col_key, base, _source_row in col_defs:
-    columns.append((col_key, base, 20, "right"))
+columns = [("model", "Model", 42, "left")]
+short_col_headers = unique_compact_labels([base for _k, base, _r in col_defs], max_len=6)
+for (col_key, _base, _source_row), header in zip(col_defs, short_col_headers):
+    columns.append((col_key, header, 6, "right"))
 
 display_rows = []
 for row in model_rows:

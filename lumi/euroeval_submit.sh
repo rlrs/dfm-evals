@@ -31,16 +31,20 @@ GPU_MEM=${GPU_MEM:-0.92}
 
 RUN_EUROEVAL=${RUN_EUROEVAL:-1}
 EUROEVAL_MODEL=${EUROEVAL_MODEL:-$SERVED_MODEL_NAME}
-EUROEVAL_LANGUAGES=${EUROEVAL_LANGUAGES:-en}
+EUROEVAL_LANGUAGES=${EUROEVAL_LANGUAGES:-da}
+DEFAULT_EUROEVAL_DATASETS="ifeval-da,danish-citizen-tests,danske-talemaader,multi-wiki-qa-da,dala"
+EUROEVAL_DATASETS=${EUROEVAL_DATASETS:-$DEFAULT_EUROEVAL_DATASETS}
 EUROEVAL_TASKS=${EUROEVAL_TASKS:-}
 EUROEVAL_NUM_ITERATIONS=${EUROEVAL_NUM_ITERATIONS:-1}
 EUROEVAL_CONCURRENCY_MODE=${EUROEVAL_CONCURRENCY_MODE:-adaptive}
 EUROEVAL_MAX_CONCURRENT_CALLS=${EUROEVAL_MAX_CONCURRENT_CALLS:-1000}
 EUROEVAL_GENERATIVE_TYPE=${EUROEVAL_GENERATIVE_TYPE:-auto}
 EUROEVAL_EXTRA_ARGS=${EUROEVAL_EXTRA_ARGS:-}
+EUROEVAL_CUSTOM_DATASETS_FILE=${EUROEVAL_CUSTOM_DATASETS_FILE:-$REPO_ROOT/lumi/euroeval_custom_datasets.py}
 EUROEVAL_EEE_OUTPUT_DIR=${EUROEVAL_EEE_OUTPUT_DIR:-}
 SLURM_LOG_DIR=${SLURM_LOG_DIR:-$REPO_ROOT/logs/slurm}
 TIME_LIMIT=${TIME_LIMIT:-}
+NODES=${NODES:-}
 
 DRY_RUN=0
 
@@ -60,14 +64,18 @@ Options:
   --run-euroeval             Run EuroEval after server startup (default)
   --no-euroeval              Skip EuroEval and only launch/verify server
   --euroeval-model <id>      EuroEval model id (default: <served-model-name>)
-  --languages <csv>          EuroEval languages (default: en)
+  --languages <csv>          EuroEval languages (default: da)
+  --datasets <csv>           EuroEval datasets (default: ifeval-da,danish-citizen-tests,danske-talemaader,multi-wiki-qa-da,dala)
+  --all-datasets             Clear dataset filter (benchmark all datasets matching language/task filters)
   --tasks <csv>              EuroEval tasks (default: all)
   --iterations <n>           EuroEval num iterations (default: 1)
+  --custom-datasets-file <p> Custom EuroEval dataset config file (default: ./lumi/euroeval_custom_datasets.py)
   --concurrency-mode <mode>  EuroEval concurrency mode: fixed|adaptive|auto (default: adaptive)
   --max-concurrent-calls <n> EuroEval max concurrent calls (default: 1000)
   --generative-type <type>   EuroEval generative type: auto|base|instruction_tuned|reasoning (default: auto)
   --extra-args <string>      Extra args appended to EuroEval CLI
   --eee-output-dir <path>    EEE root data dir override (default: ./logs/every_eval_ever/data)
+  --nodes <n>                Slurm node count override (default: from sbatch file)
   --time <HH:MM:SS>          Slurm time limit override (default: from sbatch file)
   --slurm-log-dir <path>     Slurm stdout/err directory (default: ./logs/slurm)
   --script <path>            sbatch script path override
@@ -76,10 +84,14 @@ Options:
 
 Examples:
   ./lumi/euroeval_submit.sh
-  ./lumi/euroeval_submit.sh --languages en,da --iterations 1
+  ./lumi/euroeval_submit.sh --languages da --iterations 1
+  ./lumi/euroeval_submit.sh --datasets ifeval-da,danish-citizen-tests,danske-talemaader,multi-wiki-qa-da,dala
+  ./lumi/euroeval_submit.sh --custom-datasets-file ./lumi/euroeval_custom_datasets.py
   ./lumi/euroeval_submit.sh --concurrency-mode adaptive --max-concurrent-calls 1000
   ./lumi/euroeval_submit.sh --tasks "knowledge,summarization"
+  ./lumi/euroeval_submit.sh --all-datasets --tasks "knowledge,summarization"
   ./lumi/euroeval_submit.sh --eee-output-dir /path/to/every_eval_ever/data
+  ./lumi/euroeval_submit.sh --nodes 1 --tp 1 --pp 1
   ./lumi/euroeval_submit.sh --time 12:00:00
   ./lumi/euroeval_submit.sh --slurm-log-dir /path/to/slurm-logs
   ./lumi/euroeval_submit.sh --no-euroeval
@@ -154,14 +166,30 @@ while [[ $# -gt 0 ]]; do
       EUROEVAL_LANGUAGES="$2"
       shift 2
       ;;
+    --datasets)
+      need_value "$1" "$#"
+      EUROEVAL_DATASETS="$2"
+      EUROEVAL_TASKS=""
+      shift 2
+      ;;
+    --all-datasets)
+      EUROEVAL_DATASETS=""
+      shift
+      ;;
     --tasks)
       need_value "$1" "$#"
       EUROEVAL_TASKS="$2"
+      EUROEVAL_DATASETS=""
       shift 2
       ;;
     --iterations)
       need_value "$1" "$#"
       EUROEVAL_NUM_ITERATIONS="$2"
+      shift 2
+      ;;
+    --custom-datasets-file)
+      need_value "$1" "$#"
+      EUROEVAL_CUSTOM_DATASETS_FILE="$2"
       shift 2
       ;;
     --concurrency-mode)
@@ -206,6 +234,11 @@ while [[ $# -gt 0 ]]; do
       EUROEVAL_EEE_OUTPUT_DIR="$2"
       shift 2
       ;;
+    --nodes)
+      need_value "$1" "$#"
+      NODES="$2"
+      shift 2
+      ;;
     --time)
       need_value "$1" "$#"
       TIME_LIMIT="$2"
@@ -235,6 +268,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "$EUROEVAL_TASKS" && -n "$EUROEVAL_DATASETS" ]]; then
+  die "EUROEVAL_TASKS and EUROEVAL_DATASETS are mutually exclusive; use only one."
+fi
+
 [[ -f "$SUBMIT_SCRIPT" ]] || die "submit script not found: $SUBMIT_SCRIPT"
 [[ -d "$OVERLAY_DIR" ]] || die "overlay dir not found: $OVERLAY_DIR"
 mkdir -p "$SLURM_LOG_DIR"
@@ -261,10 +298,14 @@ env_kv=(
   "EUROEVAL_CONCURRENCY_MODE=$EUROEVAL_CONCURRENCY_MODE"
   "EUROEVAL_MAX_CONCURRENT_CALLS=$EUROEVAL_MAX_CONCURRENT_CALLS"
   "EUROEVAL_GENERATIVE_TYPE=$EUROEVAL_GENERATIVE_TYPE"
+  "EUROEVAL_CUSTOM_DATASETS_FILE=$EUROEVAL_CUSTOM_DATASETS_FILE"
   "EUROEVAL_SLURM_LOG_DIR=$SLURM_LOG_DIR"
 )
 if [[ -n "$EUROEVAL_TASKS" ]]; then
   env_kv+=("EUROEVAL_TASKS=$EUROEVAL_TASKS")
+fi
+if [[ -n "$EUROEVAL_DATASETS" ]]; then
+  env_kv+=("EUROEVAL_DATASETS=$EUROEVAL_DATASETS")
 fi
 if [[ -n "$EUROEVAL_EXTRA_ARGS" ]]; then
   env_kv+=("EUROEVAL_EXTRA_ARGS=$EUROEVAL_EXTRA_ARGS")
@@ -284,8 +325,10 @@ echo "Port: $PORT"
 echo "Run EuroEval: $RUN_EUROEVAL"
 echo "EuroEval model: $EUROEVAL_MODEL"
 echo "EuroEval languages: $EUROEVAL_LANGUAGES"
+echo "EuroEval datasets: ${EUROEVAL_DATASETS:-<all>}"
 echo "EuroEval tasks: ${EUROEVAL_TASKS:-<all>}"
 echo "EuroEval iterations: $EUROEVAL_NUM_ITERATIONS"
+echo "EuroEval custom datasets file: $EUROEVAL_CUSTOM_DATASETS_FILE"
 echo "EuroEval concurrency mode: $EUROEVAL_CONCURRENCY_MODE"
 echo "EuroEval max concurrent calls: $EUROEVAL_MAX_CONCURRENT_CALLS"
 echo "EuroEval generative type: $EUROEVAL_GENERATIVE_TYPE"
@@ -300,8 +343,14 @@ fi
 if [[ -n "$EUROEVAL_EEE_OUTPUT_DIR" ]]; then
   echo "EEE output dir override: $EUROEVAL_EEE_OUTPUT_DIR"
 fi
+if [[ -n "$NODES" ]]; then
+  echo "Slurm node override: $NODES"
+fi
 
 sbatch_args=(--output "$slurm_out_path" --error "$slurm_err_path")
+if [[ -n "$NODES" ]]; then
+  sbatch_args+=(--nodes "$NODES")
+fi
 if [[ -n "$TIME_LIMIT" ]]; then
   sbatch_args+=(--time "$TIME_LIMIT")
 fi

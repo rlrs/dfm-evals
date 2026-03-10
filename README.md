@@ -56,7 +56,13 @@ uv run evals eee euroeval --results-file /path/to/euroeval_benchmark_results.jso
 # Optional: record inference endpoint/provider context
 uv run evals eee inspect --log-path logs/evals-logs/<run_label> --output-dir out/eee/data --inference-base-url https://inference.example/v1 --inference-provider-name my-provider
 uv run evals tournament --help
+uv run evals tournament view logs/evals-logs/<tournament_run_label>/state --host 127.0.0.1 --port 7576
 ```
+
+For tournament runs, `evals tournament view` is the main report surface for
+standings, head-to-heads, prompt drilldown, and judged responses. `inspect
+view` is still useful for raw generation/judge log debugging, but it does not
+understand tournament state or final rankings.
 
 Prime Sandbox provider (Inspect `--sandbox prime`):
 

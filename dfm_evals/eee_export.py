@@ -1280,12 +1280,15 @@ def _extract_euroeval_results(
     entry: Mapping[str, Any],
     source_data: Mapping[str, Any],
     generation_config: Mapping[str, Any] | None,
+    dataset_name: str,
+    task_name: str,
 ) -> list[dict[str, Any]]:
     results = _as_mapping(entry.get("results"))
     totals = _as_mapping(results.get("total"))
     raw_scores = results.get("raw")
     sample_count = len(raw_scores) if isinstance(raw_scores, list) else None
-    task_name = str(entry.get("task") or entry.get("dataset") or "unknown_task")
+    dataset_label = str(dataset_name or task_name or "unknown_dataset")
+    task_group = str(task_name or dataset_name or "unknown_task")
 
     evaluation_results: list[dict[str, Any]] = []
     for key, value in sorted(totals.items()):
@@ -1320,7 +1323,8 @@ def _extract_euroeval_results(
             "score": score,
             "details": _string_dict(
                 {
-                    "task": task_name,
+                    "task": dataset_label,
+                    "scorer": task_group,
                     "metric": metric_name,
                 }
             ),
@@ -1330,10 +1334,12 @@ def _extract_euroeval_results(
         evaluation_results.append(
             _compact(
                 {
-                    "evaluation_name": f"{task_name}/{metric_name}",
+                    "evaluation_name": f"{dataset_label}/{task_group}/{metric_name}",
                     "source_data": dict(source_data),
                     "metric_config": {
-                        "evaluation_description": f"{task_name}:{metric_name}",
+                        "evaluation_description": (
+                            f"{dataset_label}:{task_group}:{metric_name}"
+                        ),
                         "lower_is_better": _infer_lower_is_better(metric_name),
                         "score_type": "continuous",
                         "min_score": min(0.0, score, score - ci_radius)
@@ -1401,6 +1407,7 @@ def export_euroeval_results(
         task_name = str(entry.get("task") or dataset_name)
 
         source_details: dict[str, str] = {"task": task_name}
+        source_details["dataset"] = dataset_name
         languages = entry.get("languages")
         if isinstance(languages, list):
             source_details["languages"] = ",".join(str(language) for language in languages)
@@ -1430,6 +1437,8 @@ def export_euroeval_results(
             entry=entry,
             source_data=source_data,
             generation_config=generation_config,
+            dataset_name=dataset_name,
+            task_name=task_name,
         )
         if len(evaluation_results) == 0:
             continue

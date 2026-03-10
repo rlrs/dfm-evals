@@ -43,12 +43,15 @@ VLLM_SERVER_API_KEY=${VLLM_SERVER_API_KEY:-${VLLM_API_KEY:-}}
 RUN_EUROEVAL=${RUN_EUROEVAL:-1}
 EUROEVAL_MODEL=${EUROEVAL_MODEL:-$SERVED_MODEL_NAME}
 EUROEVAL_API_BASE=${EUROEVAL_API_BASE:-http://127.0.0.1:$PORT/v1}
-EUROEVAL_LANGUAGES=${EUROEVAL_LANGUAGES:-en}
+EUROEVAL_LANGUAGES=${EUROEVAL_LANGUAGES:-da}
+DEFAULT_EUROEVAL_DATASETS="ifeval-da,danish-citizen-tests,danske-talemaader,multi-wiki-qa-da,dala"
+EUROEVAL_DATASETS=${EUROEVAL_DATASETS:-$DEFAULT_EUROEVAL_DATASETS}
 EUROEVAL_TASKS=${EUROEVAL_TASKS:-}
 EUROEVAL_NUM_ITERATIONS=${EUROEVAL_NUM_ITERATIONS:-1}
 EUROEVAL_CONCURRENCY_MODE=${EUROEVAL_CONCURRENCY_MODE:-adaptive}
 EUROEVAL_MAX_CONCURRENT_CALLS=${EUROEVAL_MAX_CONCURRENT_CALLS:-1000}
 EUROEVAL_GENERATIVE_TYPE=${EUROEVAL_GENERATIVE_TYPE:-auto}
+EUROEVAL_CUSTOM_DATASETS_FILE=${EUROEVAL_CUSTOM_DATASETS_FILE:-$REPO_ROOT/lumi/euroeval_custom_datasets.py}
 EUROEVAL_CACHE_DIR=${EUROEVAL_CACHE_DIR:-/overlay/euroeval-cache-${SLURM_JOB_ID:-manual}}
 EUROEVAL_RUN_DIR=${EUROEVAL_RUN_DIR:-/overlay/euroeval-runs/${SLURM_JOB_ID:-manual}}
 EUROEVAL_EXPORT_EEE=${EUROEVAL_EXPORT_EEE:-1}
@@ -170,6 +173,10 @@ case "$EUROEVAL_CONCURRENCY_MODE" in
     die "invalid EUROEVAL_CONCURRENCY_MODE=$EUROEVAL_CONCURRENCY_MODE (expected fixed|adaptive|auto)"
     ;;
 esac
+
+if [[ -n "$EUROEVAL_TASKS" && -n "$EUROEVAL_DATASETS" ]]; then
+  die "EUROEVAL_TASKS and EUROEVAL_DATASETS are mutually exclusive; set at most one."
+fi
 
 ADAPTER_CONFIG_PATH="$MODEL/adapter_config.json"
 ADAPTER_WEIGHTS_PATH="$MODEL/adapter_model.safetensors"
@@ -325,6 +332,17 @@ build_euroeval_cli() {
     euroeval_args+=(--task "$task")
   done
 
+  local raw_datasets="${EUROEVAL_DATASETS//,/ }"
+  local dataset
+  for dataset in $raw_datasets; do
+    [[ -n "$dataset" ]] || continue
+    euroeval_args+=(--dataset "$dataset")
+  done
+
+  if [[ -n "$EUROEVAL_CUSTOM_DATASETS_FILE" ]]; then
+    euroeval_args+=(--custom-datasets-file "$EUROEVAL_CUSTOM_DATASETS_FILE")
+  fi
+
   local escaped_args=""
   printf -v escaped_args '%q ' "${euroeval_args[@]}"
   out_cmd_ref="euroeval ${escaped_args}"
@@ -431,8 +449,10 @@ echo "RUN_EUROEVAL: $RUN_EUROEVAL"
 echo "EUROEVAL_MODEL: $EUROEVAL_MODEL"
 echo "EUROEVAL_API_BASE: $EUROEVAL_API_BASE"
 echo "EUROEVAL_LANGUAGES: $EUROEVAL_LANGUAGES"
+echo "EUROEVAL_DATASETS: ${EUROEVAL_DATASETS:-<all-datasets>}"
 echo "EUROEVAL_TASKS: ${EUROEVAL_TASKS:-<all-tasks>}"
 echo "EUROEVAL_NUM_ITERATIONS: $EUROEVAL_NUM_ITERATIONS"
+echo "EUROEVAL_CUSTOM_DATASETS_FILE: $EUROEVAL_CUSTOM_DATASETS_FILE"
 echo "EUROEVAL_CONCURRENCY_MODE: $EUROEVAL_CONCURRENCY_MODE"
 echo "EUROEVAL_MAX_CONCURRENT_CALLS: $EUROEVAL_MAX_CONCURRENT_CALLS"
 echo "EUROEVAL_GENERATIVE_TYPE: $EUROEVAL_GENERATIVE_TYPE"

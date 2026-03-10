@@ -9,6 +9,9 @@ instead of relying on Inspect self-spawn.
 - `lumi/build_overlay_minimal.sh`: build/update overlay venv with vLLM + dependencies.
 - `lumi/submit.sh`: submit suite runs via `sbatch`.
 - `lumi/run_suite.sbatch`: batch job entrypoint used by `submit.sh`.
+- `lumi/tournament_submit.sh`: submit phase-based tournament runs via `sbatch`.
+- `lumi/run_tournament.sbatch`: batch job entrypoint used by `tournament_submit.sh`.
+- `lumi/tournament_launch.py`: validate tournament launch-maps and emit shell-safe runtime config.
 - `lumi/euroeval_submit.sh`: submit 2-node vLLM + EuroEval jobs.
 - `lumi/run_euroeval.sbatch`: 2-node vLLM MP launcher with optional EuroEval.
 - `lumi/view.sh`: inspect-view helper (default log root: `logs/evals-logs`).
@@ -64,6 +67,93 @@ OVERLAY_DIR=/pfs/lustrep4/scratch/project_465002183/rasmus/vllm-lumi/overlay_vll
 If the adapter directory contains tokenizer artifacts (for example
 `tokenizer_config.json` or `tokenizer.json`), the launch scripts pass that
 directory as `--tokenizer` so vLLM uses the adapter tokenizer.
+
+## Tournament
+
+Tournament uses a separate launcher instead of `lumi/submit.sh` because it is
+multi-contestant, stateful, and phase-based.
+
+Committed tournament definitions live under `configs/tournaments/<name>/` and
+typically include:
+
+```text
+configs/tournaments/creative-writing-da-smoke/
+  tournament.yaml
+  launch-map.yaml
+```
+
+The core tournament definition is YAML and can keep prompts external via
+`prompt_source`, so you do not need to hand-edit large inline prompt arrays.
+
+Minimal launch-map shape:
+
+```yaml
+defaults:
+  tp: 1
+  dp: 8
+contestants:
+  vllm/org/model-a:
+    mode: local_vllm
+    model: ../../post/outputs/sft-16292768/final
+  openai/model-b:
+    mode: external_openai
+    base_url_env: MODEL_B_BASE_URL
+    api_key_env: MODEL_B_API_KEY
+judge:
+  mode: local_vllm
+  model: google/gemma-3-27b-it
+```
+
+Common flows:
+
+```bash
+# Generate contestant responses into a new run
+./lumi/tournament_submit.sh \
+  --phase generate \
+  --definition creative-writing-da-smoke
+
+# Full flow with an overridden contestant roster and judge model
+./lumi/tournament_submit.sh \
+  --phase all \
+  --definition creative-writing-da-smoke \
+  --contestant-model vllm/google/gemma-3-4b-it \
+  --contestant-model vllm/google-gemma-3-4b-pt-hermes-final \
+  --judge-model openai/qwen-235b
+
+# Run or resume judging against an existing tournament run dir
+./lumi/tournament_submit.sh \
+  --phase run \
+  --target ./logs/evals-logs/tournament__demo__job-123 \
+  --launch-map ./configs/tournaments/creative-writing-da-smoke
+
+# Export tournament artifacts plus Every Eval Ever JSON
+./lumi/tournament_submit.sh \
+  --phase export \
+  --target ./logs/evals-logs/tournament__demo__job-123
+```
+
+Notes:
+
+- `--phase all` runs `generate -> run -> export`.
+- `--definition <name>` resolves committed definitions from `configs/tournaments/<name>/`.
+- `--contestant-model` and `--judge-model` override the committed model lineup without editing the definition YAML.
+- contestant endpoints are launched one model at a time from the launch-map.
+- `run` and `resume` require complete generation coverage and will fail fast if responses are missing.
+- raw contestant and judge server logs are written under `logs/evals-logs/<run_label>/services/vllm/`.
+
+Hosted tournament viewer:
+
+```bash
+uv run evals tournament view \
+  logs/evals-logs/tournament__demo__job-123 \
+  --host 127.0.0.1 \
+  --port 7576
+```
+
+Use the hosted tournament viewer for standings, pairwise results, prompts, and
+response drilldown. `lumi/view.sh` still launches `inspect view`, which is
+useful for raw generation/judge batch logs but is not the top-level tournament
+report.
 
 ## Tool Calling Defaults
 
@@ -174,11 +264,19 @@ Run the dedicated 2-node vLLM MP + EuroEval workflow:
 ./lumi/euroeval_submit.sh
 ```
 
+Current defaults in this repo:
+
+- `--languages da`
+- `--iterations 1`
+- `--datasets ifeval-da,danish-citizen-tests,danske-talemaader,multi-wiki-qa-da,dala`
+- `--custom-datasets-file ./lumi/euroeval_custom_datasets.py` (adds `dala`)
+
 Common examples:
 
 ```bash
-./lumi/euroeval_submit.sh --languages en,da --iterations 1
-./lumi/euroeval_submit.sh --tasks "knowledge,summarization"
+./lumi/euroeval_submit.sh --datasets ifeval-da,danish-citizen-tests,danske-talemaader,multi-wiki-qa-da,dala
+./lumi/euroeval_submit.sh --all-datasets --languages da
+./lumi/euroeval_submit.sh --all-datasets --tasks "knowledge,summarization"
 ./lumi/euroeval_submit.sh --generative-type reasoning
 ./lumi/euroeval_submit.sh --time 12:00:00
 ./lumi/euroeval_submit.sh --no-euroeval
@@ -233,9 +331,10 @@ and prints task/scorer/metric aggregates. Use `--compare-models` for model-vs-ta
 
 Default eval artifact roots:
 
-- `logs/evals-runs/<run_label>`
-- `logs/evals-logs/<run_label>`
-- `logs/evals-logs/<run_label>/_vllm_server` (launcher-managed vLLM raw logs)
+- `logs/evals-logs/<run_label>/`
+- `logs/evals-logs/<run_label>/config/runtime.json`
+- `logs/evals-logs/<run_label>/inspect/` (generation + judge Inspect logs)
+- `logs/evals-logs/<run_label>/services/vllm/` (launcher-managed vLLM raw logs)
 - `logs/every_eval_ever/data/` (shared converted EEE JSON + Inspect instance-level JSONL)
 
 Overlay still holds runtime environment assets (`venv`, source checkouts, cache).
@@ -349,8 +448,8 @@ sacct -j <job_id> --format=JobID,JobName%30,State,Elapsed,ExitCode -P
 Inspect success checks:
 
 ```bash
-find logs/evals-logs/<run_label> -maxdepth 1 -name '*.eval'
-ls logs/evals-logs/<run_label>/_vllm_server/
+find logs/evals-logs/<run_label>/inspect -name '*.eval'
+ls logs/evals-logs/<run_label>/services/vllm/
 ```
 
 EuroEval success checks:

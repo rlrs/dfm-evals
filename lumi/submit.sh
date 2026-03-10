@@ -386,6 +386,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# If judge model is preconfigured via environment/.env, treat it as explicit
+# unless the CLI later overrides it.
+if [[ "$JUDGE_MODEL_SET" == "0" && -n "$JUDGE_MODEL" ]]; then
+  JUDGE_MODEL_SET=1
+fi
+
 if [[ -z "$EVAL_MODEL" ]]; then
   EVAL_MODEL="vllm/$MODEL"
 fi
