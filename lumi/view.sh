@@ -36,6 +36,9 @@ VIEW_PORT=${VIEW_PORT:-7575}
 VIEW_RECURSIVE=${VIEW_RECURSIVE:-1}
 VIEW_OUTPUT_DIR=${VIEW_OUTPUT_DIR:-$REPO_ROOT/view-bundle}
 VIEW_OVERWRITE=${VIEW_OVERWRITE:-1}
+VIEW_RUN_LABEL=${VIEW_RUN_LABEL:-}
+VIEW_XDG_CACHE_HOME=${VIEW_XDG_CACHE_HOME:-}
+VIEW_XDG_DATA_HOME=${VIEW_XDG_DATA_HOME:-}
 HF_HOME=${HF_HOME:-/flash/project_465002183/.cache/huggingface/}
 PASSTHROUGH_ARGS=()
 
@@ -72,6 +75,7 @@ Environment overrides:
   VIEW_SELECTOR, VIEW_SELECTOR_VALUE, VIEW_LOG_DIR
   VIEW_HOST, VIEW_PORT, VIEW_RECURSIVE
   VIEW_OUTPUT_DIR, VIEW_OVERWRITE
+  VIEW_RUN_LABEL, VIEW_XDG_CACHE_HOME, VIEW_XDG_DATA_HOME
   EVAL_LOG_ROOT_HOST, EVAL_LOG_ROOT_CONTAINER
   SLURM_LOG_DIR_HOST (used by --job-id fallback resolution)
   OVERLAY_LOG_ROOT_HOST, OVERLAY_LOG_ROOT_CONTAINER (legacy aliases)
@@ -83,6 +87,7 @@ Examples:
   ./lumi/view.sh start --latest
   ./lumi/view.sh start --job-id 16316016
   ./lumi/view.sh start --label fundamentals__vllm_google_gemma-3-4b-it__job-16316016
+  ./lumi/view.sh start --job-id 16636687  # auto-loads XDG data/cache for live traces
   ./lumi/view.sh bundle --latest --output-dir ./view-bundle-latest
 EOF
 }
@@ -172,6 +177,22 @@ run_dir_for_job_id() {
   printf '%s' "$match"
 }
 
+slurm_stdout_for_run_label() {
+  local run_label="$1"
+  [[ -d "$SLURM_LOG_DIR_HOST" ]] || return 0
+  find "$SLURM_LOG_DIR_HOST" -mindepth 1 -maxdepth 1 -type f -name "${run_label}-*.out" -printf '%T@|%p\n' \
+    | sort -t'|' -k1,1nr \
+    | head -n 1 \
+    | cut -d'|' -f2-
+}
+
+extract_logged_value() {
+  local log_file="$1"
+  local prefix="$2"
+  [[ -f "$log_file" ]] || return 0
+  grep -F "$prefix" "$log_file" | tail -n 1 | sed "s|^.*${prefix}||"
+}
+
 path_to_container_log_dir() {
   local input_path="$1"
   if [[ "$input_path" == "$EVAL_LOG_ROOT_HOST" ]]; then
@@ -239,6 +260,63 @@ resolve_view_log_dir() {
       die "unknown view selector: $VIEW_SELECTOR"
       ;;
   esac
+}
+
+resolve_view_run_label() {
+  if [[ -n "$VIEW_RUN_LABEL" ]]; then
+    return
+  fi
+  if [[ -n "$VIEW_LOG_DIR" && "$VIEW_LOG_DIR" != "$EVAL_LOG_ROOT_CONTAINER" ]]; then
+    VIEW_RUN_LABEL="$(basename "$VIEW_LOG_DIR")"
+    return
+  fi
+  case "$VIEW_SELECTOR" in
+    latest)
+      VIEW_RUN_LABEL="$(run_dir_for_latest)"
+      ;;
+    job-id)
+      [[ -n "$VIEW_SELECTOR_VALUE" ]] || return
+      VIEW_RUN_LABEL="$(run_dir_for_job_id "$VIEW_SELECTOR_VALUE")"
+      ;;
+    label)
+      VIEW_RUN_LABEL="$VIEW_SELECTOR_VALUE"
+      ;;
+    log-dir)
+      if [[ -n "$VIEW_SELECTOR_VALUE" && "$VIEW_SELECTOR_VALUE" != /* ]]; then
+        VIEW_RUN_LABEL="$VIEW_SELECTOR_VALUE"
+      elif [[ -n "$VIEW_LOG_DIR" && "$VIEW_LOG_DIR" != "$EVAL_LOG_ROOT_CONTAINER" ]]; then
+        VIEW_RUN_LABEL="$(basename "$VIEW_LOG_DIR")"
+      fi
+      ;;
+  esac
+}
+
+resolve_view_xdg_homes() {
+  [[ "$VIEW_MODE" == "start" ]] || return
+  resolve_view_run_label
+  [[ -n "$VIEW_RUN_LABEL" ]] || return
+
+  if [[ -n "$VIEW_XDG_CACHE_HOME" && -n "$VIEW_XDG_DATA_HOME" ]]; then
+    return
+  fi
+
+  local slurm_stdout=""
+  slurm_stdout="$(slurm_stdout_for_run_label "$VIEW_RUN_LABEL" || true)"
+  if [[ -n "$slurm_stdout" ]]; then
+    if [[ -z "$VIEW_XDG_CACHE_HOME" ]]; then
+      VIEW_XDG_CACHE_HOME="$(extract_logged_value "$slurm_stdout" "XDG cache home: " || true)"
+    fi
+    if [[ -z "$VIEW_XDG_DATA_HOME" ]]; then
+      VIEW_XDG_DATA_HOME="$(extract_logged_value "$slurm_stdout" "XDG data home: " || true)"
+    fi
+  fi
+
+  if [[ -z "$VIEW_XDG_CACHE_HOME" ]]; then
+    VIEW_XDG_CACHE_HOME="/overlay/cache/dfm-evals-${VIEW_RUN_LABEL}/xdg-cache"
+  fi
+  if [[ -z "$VIEW_XDG_DATA_HOME" ]]; then
+    VIEW_XDG_DATA_HOME="/overlay/cache/dfm-evals-${VIEW_RUN_LABEL}/xdg-data"
+  fi
 }
 
 if [[ $# -gt 0 ]]; then
@@ -367,6 +445,7 @@ render_env() {
 }
 
 resolve_view_log_dir
+resolve_view_xdg_homes
 
 # If bundle output is outside known bind mounts, bind it explicitly.
 if [[ "$VIEW_MODE" == "bundle" ]]; then
@@ -412,6 +491,13 @@ echo "SIF: $SIF"
 echo "Overlay: $OVERLAY_DIR"
 echo "Mode: $VIEW_MODE"
 echo "Log dir: $VIEW_LOG_DIR"
+if [[ -n "$VIEW_RUN_LABEL" ]]; then
+  echo "Run label: $VIEW_RUN_LABEL"
+fi
+if [[ "$VIEW_MODE" == "start" && -n "$VIEW_XDG_DATA_HOME" ]]; then
+  echo "XDG cache home: $VIEW_XDG_CACHE_HOME"
+  echo "XDG data home: $VIEW_XDG_DATA_HOME"
+fi
 if [[ "$VIEW_MODE" == "start" ]]; then
   echo "View URL: http://${VIEW_HOST}:${VIEW_PORT}"
 fi
@@ -420,6 +506,12 @@ if [[ "$VIEW_MODE" == "bundle" ]]; then
 fi
 
 RUN_CMD="$(render_env)
+if [[ -n \"${VIEW_XDG_CACHE_HOME}\" ]]; then
+  export XDG_CACHE_HOME=\"${VIEW_XDG_CACHE_HOME}\"
+fi
+if [[ -n \"${VIEW_XDG_DATA_HOME}\" ]]; then
+  export XDG_DATA_HOME=\"${VIEW_XDG_DATA_HOME}\"
+fi
 ${INSPECT_CMD}"
 
 singularity exec --rocm "${SING_BIND_ARGS[@]}" "$SIF" bash -lc "$RUN_CMD"

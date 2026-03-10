@@ -41,6 +41,7 @@ TARGET_VISIBLE_DEVICES=${TARGET_VISIBLE_DEVICES:-}
 MAX_CONNECTIONS=${MAX_CONNECTIONS:-128}
 TARGET_ENABLE_AUTO_TOOL_CHOICE=${TARGET_ENABLE_AUTO_TOOL_CHOICE:-1}
 TARGET_TOOL_CALL_PARSER=${TARGET_TOOL_CALL_PARSER:-hermes}
+TARGET_CHAT_TEMPLATE_KWARGS_JSON=${TARGET_CHAT_TEMPLATE_KWARGS_JSON:-}
 TARGET_ENFORCE_EAGER=${TARGET_ENFORCE_EAGER:-0}
 JUDGE_SERVER_ENABLED=${JUDGE_SERVER_ENABLED:-0}
 JUDGE_SERVER_MODEL=${JUDGE_SERVER_MODEL:-}
@@ -54,8 +55,10 @@ JUDGE_GPU_MEM=${JUDGE_GPU_MEM:-0.85}
 JUDGE_VISIBLE_DEVICES=${JUDGE_VISIBLE_DEVICES:-}
 JUDGE_ENABLE_AUTO_TOOL_CHOICE=${JUDGE_ENABLE_AUTO_TOOL_CHOICE:-0}
 JUDGE_TOOL_CALL_PARSER=${JUDGE_TOOL_CALL_PARSER:-}
+JUDGE_CHAT_TEMPLATE_KWARGS_JSON=${JUDGE_CHAT_TEMPLATE_KWARGS_JSON:-}
 JUDGE_ENFORCE_EAGER=${JUDGE_ENFORCE_EAGER:-0}
 JUDGE_CTX_SET=0
+DFM_EVALS_MODAL_ENABLE_OUTPUT=${DFM_EVALS_MODAL_ENABLE_OUTPUT:-0}
 RUN_LABEL=${RUN_LABEL:-}
 EXTRA_ARGS=${EXTRA_ARGS:-}
 DFM_EVALS_EEE_OUTPUT_DIR=${DFM_EVALS_EEE_OUTPUT_DIR:-}
@@ -74,7 +77,7 @@ Options:
   --judge-model <model>      Suite judge model (accepts plain name like qwen-235b; default: openai/<target-model-name>)
   --openai-base-url <url>    Override OPENAI_BASE_URL inside job/container
   --suite <name>             Eval suite (default: fundamentals)
-  --limit <n>                Sample limit (default: 100)
+  --limit <n|none>           Sample limit (default: 100, use 'none' to omit)
   --tp <n>                   Target server tensor parallel size (default: 1)
   --pp <n>                   Target server pipeline parallel size (default: 1)
   --dp <n>                   Target server data parallel size (default: 8)
@@ -97,13 +100,17 @@ Options:
   --target-enable-auto-tool-choice   Enable target vLLM --enable-auto-tool-choice (default)
   --target-disable-auto-tool-choice  Disable target vLLM --enable-auto-tool-choice
   --target-tool-call-parser <name>   Target vLLM --tool-call-parser (default: hermes; use 'none' to unset)
+  --target-chat-template-kwargs-json <json>  Target vLLM --default-chat-template-kwargs JSON
   --target-enforce-eager             Enable target vLLM --enforce-eager
   --target-disable-enforce-eager     Disable target vLLM --enforce-eager (default)
   --judge-enable-auto-tool-choice    Enable judge vLLM --enable-auto-tool-choice
   --judge-disable-auto-tool-choice   Disable judge vLLM --enable-auto-tool-choice (default)
   --judge-tool-call-parser <name>    Judge vLLM --tool-call-parser (default: unset; use 'none' to unset)
+  --judge-chat-template-kwargs-json <json>   Judge vLLM --default-chat-template-kwargs JSON
   --judge-enforce-eager              Enable judge vLLM --enforce-eager
   --judge-disable-enforce-eager      Disable judge vLLM --enforce-eager (default)
+  --modal-enable-output      Wrap eval execution in `modal.enable_output()` for Modal logs
+  --modal-disable-output     Disable Modal SDK output (default)
   --run-label <label>        Optional DFM_EVALS_RUN_LABEL override (default: <suite>__<model-slug>__job-<jobid>)
   --extra-args <string>      Extra args appended to evals CLI
   --eee-output-dir <path>    EEE root data dir override (default: ./logs/every_eval_ever/data)
@@ -208,7 +215,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --limit)
       need_value "$1" "$#"
-      LIMIT="$2"
+      case "$2" in
+        none|off|all)
+          LIMIT=""
+          ;;
+        *)
+          LIMIT="$2"
+          ;;
+      esac
       shift 2
       ;;
     --tp)
@@ -318,6 +332,11 @@ while [[ $# -gt 0 ]]; do
       TARGET_TOOL_CALL_PARSER="$2"
       shift 2
       ;;
+    --target-chat-template-kwargs-json)
+      need_value "$1" "$#"
+      TARGET_CHAT_TEMPLATE_KWARGS_JSON="$2"
+      shift 2
+      ;;
     --target-enforce-eager)
       TARGET_ENFORCE_EAGER=1
       shift
@@ -339,12 +358,25 @@ while [[ $# -gt 0 ]]; do
       JUDGE_TOOL_CALL_PARSER="$2"
       shift 2
       ;;
+    --judge-chat-template-kwargs-json)
+      need_value "$1" "$#"
+      JUDGE_CHAT_TEMPLATE_KWARGS_JSON="$2"
+      shift 2
+      ;;
     --judge-enforce-eager)
       JUDGE_ENFORCE_EAGER=1
       shift
       ;;
     --judge-disable-enforce-eager)
       JUDGE_ENFORCE_EAGER=0
+      shift
+      ;;
+    --modal-enable-output)
+      DFM_EVALS_MODAL_ENABLE_OUTPUT=1
+      shift
+      ;;
+    --modal-disable-output)
+      DFM_EVALS_MODAL_ENABLE_OUTPUT=0
       shift
       ;;
     --run-label)
@@ -481,6 +513,7 @@ env_kv=(
   "JUDGE_MODEL_AUTO=$([[ \"$JUDGE_MODEL_SET\" == \"0\" ]] && echo 1 || echo 0)"
   "DFM_EVALS_SUITE=$SUITE"
   "DFM_EVALS_LIMIT=$LIMIT"
+  "DFM_EVALS_MODAL_ENABLE_OUTPUT=$DFM_EVALS_MODAL_ENABLE_OUTPUT"
   "TP=$TP"
   "PP=$PP"
   "DP=$DP"
@@ -490,6 +523,7 @@ env_kv=(
   "MAX_CONNECTIONS=$MAX_CONNECTIONS"
   "TARGET_ENABLE_AUTO_TOOL_CHOICE=$TARGET_ENABLE_AUTO_TOOL_CHOICE"
   "TARGET_TOOL_CALL_PARSER=$TARGET_TOOL_CALL_PARSER"
+  "TARGET_CHAT_TEMPLATE_KWARGS_JSON=$TARGET_CHAT_TEMPLATE_KWARGS_JSON"
   "TARGET_ENFORCE_EAGER=$TARGET_ENFORCE_EAGER"
   "JUDGE_SERVER_ENABLED=$JUDGE_SERVER_ENABLED"
   "JUDGE_SERVER_MODEL=$JUDGE_SERVER_MODEL"
@@ -501,6 +535,7 @@ env_kv=(
   "JUDGE_GPU_MEM=$JUDGE_GPU_MEM"
   "JUDGE_ENABLE_AUTO_TOOL_CHOICE=$JUDGE_ENABLE_AUTO_TOOL_CHOICE"
   "JUDGE_TOOL_CALL_PARSER=$JUDGE_TOOL_CALL_PARSER"
+  "JUDGE_CHAT_TEMPLATE_KWARGS_JSON=$JUDGE_CHAT_TEMPLATE_KWARGS_JSON"
   "JUDGE_ENFORCE_EAGER=$JUDGE_ENFORCE_EAGER"
 )
 if [[ -n "$RUN_LABEL" ]]; then
@@ -536,7 +571,11 @@ else
   echo "Judge model source: explicit"
 fi
 echo "Suite: $SUITE"
-echo "Limit: $LIMIT"
+if [[ -n "$LIMIT" ]]; then
+  echo "Limit: $LIMIT"
+else
+  echo "Limit: <unset>"
+fi
 echo "TP/PP/DP: $TP/$PP/$DP"
 echo "CTX: $CTX"
 echo "GPU_MEM: $GPU_MEM"
@@ -545,6 +584,7 @@ echo "Target devices: ${TARGET_VISIBLE_DEVICES:-<all>}"
 echo "Max connections: $MAX_CONNECTIONS"
 echo "Target auto tool choice: $TARGET_ENABLE_AUTO_TOOL_CHOICE"
 echo "Target tool call parser: ${TARGET_TOOL_CALL_PARSER:-<none>}"
+echo "Target chat template kwargs: ${TARGET_CHAT_TEMPLATE_KWARGS_JSON:-<none>}"
 echo "Target enforce eager: $TARGET_ENFORCE_EAGER"
 echo "Judge server enabled: $JUDGE_SERVER_ENABLED"
 echo "Judge server model: $JUDGE_SERVER_MODEL"
@@ -555,7 +595,9 @@ echo "Judge GPU_MEM: $JUDGE_GPU_MEM"
 echo "Judge devices: ${JUDGE_VISIBLE_DEVICES:-<all>}"
 echo "Judge auto tool choice: $JUDGE_ENABLE_AUTO_TOOL_CHOICE"
 echo "Judge tool call parser: ${JUDGE_TOOL_CALL_PARSER:-<none>}"
+echo "Judge chat template kwargs: ${JUDGE_CHAT_TEMPLATE_KWARGS_JSON:-<none>}"
 echo "Judge enforce eager: $JUDGE_ENFORCE_EAGER"
+echo "Modal enable output: $DFM_EVALS_MODAL_ENABLE_OUTPUT"
 if [[ -n "$JUDGE_SERVER_SERVED_MODEL_NAME" ]]; then
   echo "Judge served name override: $JUDGE_SERVER_SERVED_MODEL_NAME"
 fi

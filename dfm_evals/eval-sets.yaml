@@ -64,6 +64,8 @@ sets:
       - "{{target_model}}"
       - --no-fail-on-error
       - --continue-on-fail
+      - --message-limit
+      - "100"
       - --limit
       - "100"
       - --temperature

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import json
 import os
@@ -60,6 +61,73 @@ def _ensure_registry_modules_loaded() -> None:
     _import_registry_module("dfm_evals._registry", required=True)
     for module_name in OPTIONAL_REGISTRY_MODULES:
         _import_registry_module(module_name, required=False)
+    _patch_inspect_sandboxes_modal_context_dir()
+
+
+def _select_modal_compose_service(config: object) -> object | None:
+    services = getattr(config, "services", None)
+    if services is None:
+        return None
+
+    for service in services.values():
+        if getattr(service, "x_default", False):
+            return service
+
+    return services.get("default") or next(iter(services.values()), None)
+
+
+def _resolve_modal_build_context_dir(build: object, compose_dir: Path) -> Path:
+    if isinstance(build, str):
+        return compose_dir / build
+
+    return compose_dir / (getattr(build, "context", None) or ".")
+
+
+def _patch_inspect_sandboxes_modal_context_dir() -> None:
+    module_names = (
+        "inspect_sandboxes.modal._compose",
+        "inspect_sandboxes.modal._modal",
+    )
+    imported_modules: dict[str, object] = {}
+    for module_name in module_names:
+        try:
+            imported_modules[module_name] = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if _is_missing_optional_module(exc, module_name):
+                return
+            raise
+
+    compose_module = imported_modules["inspect_sandboxes.modal._compose"]
+    modal_module = imported_modules["inspect_sandboxes.modal._modal"]
+    if not hasattr(compose_module, "convert_compose_to_modal_params") or not hasattr(
+        modal_module, "convert_compose_to_modal_params"
+    ):
+        return
+
+    patched_convert = getattr(compose_module, "convert_compose_to_modal_params")
+    if not getattr(patched_convert, "__dfm_evals_patched__", False):
+        original_convert = patched_convert
+
+        def patched_convert(config: object, compose_path: str | None) -> dict[str, object]:
+            params = original_convert(config, compose_path)
+            service = _select_modal_compose_service(config)
+            build = getattr(service, "build", None) if service is not None else None
+            if build is None:
+                return params
+
+            compose_dir = Path(compose_path).parent if compose_path else Path.cwd()
+            dockerfile_path = compose_module.resolve_dockerfile_path(build, compose_dir)
+            context_dir = _resolve_modal_build_context_dir(build, compose_dir)
+            params["image"] = compose_module.modal.Image.from_dockerfile(
+                str(dockerfile_path),
+                context_dir=str(context_dir),
+            )
+            return params
+
+        patched_convert.__dfm_evals_patched__ = True
+        compose_module.convert_compose_to_modal_params = patched_convert
+
+    modal_module.convert_compose_to_modal_params = compose_module.convert_compose_to_modal_params
 
 
 def _load_model_info_overrides() -> dict[str, dict[str, object]]:
@@ -143,6 +211,25 @@ def _apply_model_info_overrides() -> None:
 
     for model_name, info_kwargs in overrides.items():
         set_model_info(model_name, ModelInfo(**info_kwargs))
+
+
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _modal_output_context() -> contextlib.AbstractContextManager[object]:
+    if not _env_flag_enabled("DFM_EVALS_MODAL_ENABLE_OUTPUT"):
+        return contextlib.nullcontext()
+
+    try:
+        modal = importlib.import_module("modal")
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "DFM_EVALS_MODAL_ENABLE_OUTPUT=1 requires the `modal` package to be installed."
+        ) from exc
+
+    return modal.enable_output()
 
 
 def _normalize_remainder_args(args: Sequence[str]) -> list[str]:
@@ -393,11 +480,12 @@ def _forward_to_inspect(args: Sequence[str], *, prog_name: str = "evals") -> int
     forwarded = _normalize_remainder_args(args)
 
     try:
-        inspect_command.main(
-            args=forwarded,
-            prog_name=prog_name,
-            standalone_mode=False,
-        )
+        with _modal_output_context():
+            inspect_command.main(
+                args=forwarded,
+                prog_name=prog_name,
+                standalone_mode=False,
+            )
     except SystemExit as exc:
         code = exc.code
         if isinstance(code, int):

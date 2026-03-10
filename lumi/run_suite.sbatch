@@ -38,6 +38,7 @@ JUDGE_MODEL_AUTO=${JUDGE_MODEL_AUTO:-0}
 DFM_EVALS_SUITE=${DFM_EVALS_SUITE:-fundamentals}
 DFM_EVALS_SUITES_FILE=${DFM_EVALS_SUITES_FILE:-}
 DFM_EVALS_LIMIT=${DFM_EVALS_LIMIT:-20}
+DFM_EVALS_MODAL_ENABLE_OUTPUT=${DFM_EVALS_MODAL_ENABLE_OUTPUT:-0}
 DFM_EVALS_TEMPERATURE=${DFM_EVALS_TEMPERATURE:-0}
 DFM_EVALS_EXTRA_ARGS=${DFM_EVALS_EXTRA_ARGS:-}
 DFM_EVALS_EXPORT_EEE=${DFM_EVALS_EXPORT_EEE:-1}
@@ -55,6 +56,7 @@ TARGET_PORT=${TARGET_PORT:-8000}
 TARGET_VISIBLE_DEVICES=${TARGET_VISIBLE_DEVICES:-}
 TARGET_ENABLE_AUTO_TOOL_CHOICE=${TARGET_ENABLE_AUTO_TOOL_CHOICE:-1}
 TARGET_TOOL_CALL_PARSER=${TARGET_TOOL_CALL_PARSER:-hermes}
+TARGET_CHAT_TEMPLATE_KWARGS_JSON=${TARGET_CHAT_TEMPLATE_KWARGS_JSON:-}
 TARGET_ENFORCE_EAGER=${TARGET_ENFORCE_EAGER:-0}
 
 JUDGE_SERVER_ENABLED=${JUDGE_SERVER_ENABLED:-0}
@@ -69,6 +71,7 @@ JUDGE_GPU_MEM=${JUDGE_GPU_MEM:-0.85}
 JUDGE_VISIBLE_DEVICES=${JUDGE_VISIBLE_DEVICES:-}
 JUDGE_ENABLE_AUTO_TOOL_CHOICE=${JUDGE_ENABLE_AUTO_TOOL_CHOICE:-0}
 JUDGE_TOOL_CALL_PARSER=${JUDGE_TOOL_CALL_PARSER:-}
+JUDGE_CHAT_TEMPLATE_KWARGS_JSON=${JUDGE_CHAT_TEMPLATE_KWARGS_JSON:-}
 JUDGE_ENFORCE_EAGER=${JUDGE_ENFORCE_EAGER:-0}
 
 SERVER_START_TIMEOUT=${SERVER_START_TIMEOUT:-900}
@@ -403,6 +406,12 @@ DFM_EVALS_CACHE_DIR=${DFM_EVALS_CACHE_DIR:-/overlay/cache/dfm-evals-${DFM_EVALS_
 DFM_EVALS_RUN_DIR=${DFM_EVALS_RUN_DIR:-${DFM_EVALS_RUN_ROOT}/${DFM_EVALS_RUN_LABEL}}
 DFM_EVALS_LOG_DIR=${DFM_EVALS_LOG_DIR:-${DFM_EVALS_LOG_ROOT}/${DFM_EVALS_RUN_LABEL}}
 DFM_EVALS_SERVER_LOG_DIR=${DFM_EVALS_SERVER_LOG_DIR:-${DFM_EVALS_LOG_DIR}/_vllm_server}
+DFM_EVALS_XDG_CACHE_HOME=${DFM_EVALS_XDG_CACHE_HOME:-${DFM_EVALS_CACHE_DIR}/xdg-cache}
+DFM_EVALS_XDG_DATA_HOME=${DFM_EVALS_XDG_DATA_HOME:-${DFM_EVALS_CACHE_DIR}/xdg-data}
+DFM_EVALS_TRITON_CACHE_DIR=${DFM_EVALS_TRITON_CACHE_DIR:-${DFM_EVALS_CACHE_DIR}/triton}
+DFM_EVALS_TORCHINDUCTOR_CACHE_DIR=${DFM_EVALS_TORCHINDUCTOR_CACHE_DIR:-${DFM_EVALS_CACHE_DIR}/torchinductor}
+TARGET_SERVER_CACHE_ROOT=${TARGET_SERVER_CACHE_ROOT:-${DFM_EVALS_CACHE_DIR}/target-server}
+JUDGE_SERVER_CACHE_ROOT=${JUDGE_SERVER_CACHE_ROOT:-${DFM_EVALS_CACHE_DIR}/judge-server}
 if [[ -z "$DFM_EVALS_EEE_OUTPUT_DIR" ]]; then
   DFM_EVALS_EEE_OUTPUT_DIR="${REPO_ROOT}/logs/every_eval_ever/data"
 fi
@@ -468,10 +477,12 @@ build_evals_cli() {
     --
     --log-dir "$DFM_EVALS_LOG_DIR"
     --model "$DFM_EVALS_MODEL"
-    --limit "$DFM_EVALS_LIMIT"
     --temperature "$DFM_EVALS_TEMPERATURE"
     --max-connections "$MAX_CONNECTIONS"
   )
+  if [[ -n "${DFM_EVALS_LIMIT:-}" ]]; then
+    evals_args+=(--limit "$DFM_EVALS_LIMIT")
+  fi
 
   local escaped_args=""
   printf -v escaped_args '%q ' "${evals_args[@]}"
@@ -488,7 +499,6 @@ source /overlay/venv/vllm-min/bin/activate
 OVERLAY_SITE=/overlay/venv/vllm-min/lib/python3.12/site-packages
 export PYTHONPATH=/overlay/src/transformers/src:/overlay/src/vllm:${OVERLAY_SITE}${PYTHONPATH:+:$PYTHONPATH}
 unset SSL_CERT_FILE REQUESTS_CA_BUNDLE CURL_CA_BUNDLE
-export TORCHDYNAMO_DISABLE=1
 if [[ -n "${ROCR_VISIBLE_DEVICES:-}" && -z "${HIP_VISIBLE_DEVICES:-}" ]]; then
   export HIP_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES}"
 fi
@@ -523,28 +533,38 @@ start_vllm_server() {
   local tokenizer_path="${16}"
   local enable_auto_tool_choice="${17}"
   local tool_call_parser="${18}"
-  local enforce_eager="${19}"
-  local log_file="${20}"
+  local chat_template_kwargs_json="${19}"
+  local enforce_eager="${20}"
+  local log_file="${21}"
+  local cache_root="${22}"
 
   local server_cmd
-  server_cmd="$(render_env)
+server_cmd="$(render_env)
 export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 export VLLM_PLUGINS=''
-export TORCHDYNAMO_DISABLE=1
+export XDG_CACHE_HOME=\"\${CACHE_ROOT%/}/xdg-cache\"
+export XDG_DATA_HOME=\"\${CACHE_ROOT%/}/xdg-data\"
+export TRITON_CACHE_DIR=\"\${CACHE_ROOT%/}/triton\"
+export TORCHINDUCTOR_CACHE_DIR=\"\${CACHE_ROOT%/}/torchinductor\"
+mkdir -p \"\${XDG_CACHE_HOME}\" \"\${XDG_DATA_HOME}\" \"\${TRITON_CACHE_DIR}\" \"\${TORCHINDUCTOR_CACHE_DIR}\"
 if [[ -n \"\${VISIBLE_DEVICES:-}\" ]]; then
   export HIP_VISIBLE_DEVICES=\"\${VISIBLE_DEVICES}\"
   export CUDA_VISIBLE_DEVICES=\"\${VISIBLE_DEVICES}\"
 fi
 EXTRA_VLLM_FLAGS=()
+EXTRA_VLLM_FLAGS+=(--enable-prefix-caching)
 if [[ \"\${ENABLE_AUTO_TOOL_CHOICE:-0}\" == \"1\" ]]; then
   EXTRA_VLLM_FLAGS+=(--enable-auto-tool-choice)
 fi
-if [[ -n \"\${TOOL_CALL_PARSER:-}\" ]]; then
-  EXTRA_VLLM_FLAGS+=(--tool-call-parser \"\${TOOL_CALL_PARSER}\")
-fi
-if [[ \"\${ENFORCE_EAGER:-0}\" == \"1\" ]]; then
-  EXTRA_VLLM_FLAGS+=(--enforce-eager)
-fi
+  if [[ -n \"\${TOOL_CALL_PARSER:-}\" ]]; then
+    EXTRA_VLLM_FLAGS+=(--tool-call-parser \"\${TOOL_CALL_PARSER}\")
+  fi
+  if [[ -n \"\${DEFAULT_CHAT_TEMPLATE_KWARGS:-}\" ]]; then
+    EXTRA_VLLM_FLAGS+=(--default-chat-template-kwargs \"\${DEFAULT_CHAT_TEMPLATE_KWARGS}\")
+  fi
+  if [[ \"\${ENFORCE_EAGER:-0}\" == \"1\" ]]; then
+    EXTRA_VLLM_FLAGS+=(--enforce-eager)
+  fi
 if [[ \"\${USE_LORA_ADAPTER:-0}\" == \"1\" ]]; then
   EXTRA_VLLM_FLAGS+=(--enable-lora --lora-modules \"\${LORA_MODULE_SPEC}\" --max-lora-rank \"\${LORA_MAX_RANK}\")
   if [[ -n \"\${LORA_CHAT_TEMPLATE_PATH:-}\" ]]; then
@@ -588,7 +608,9 @@ vllm serve \"\${MODEL_TAG}\" \\
       LORA_TOKENIZER_PATH="$tokenizer_path" \
       ENABLE_AUTO_TOOL_CHOICE="$enable_auto_tool_choice" \
       TOOL_CALL_PARSER="$tool_call_parser" \
+      DEFAULT_CHAT_TEMPLATE_KWARGS="$chat_template_kwargs_json" \
       ENFORCE_EAGER="$enforce_eager" \
+      CACHE_ROOT="$cache_root" \
       bash -lc "$server_cmd" \
       >"$log_file" 2>&1 &
 
@@ -665,7 +687,10 @@ if [[ "$JUDGE_USE_LORA_ADAPTER" == "1" && -d "$JUDGE_LORA_ADAPTER_PATH" ]]; then
   SING_BIND_ARGS+=(-B "$JUDGE_LORA_ADAPTER_PATH:$JUDGE_LORA_ADAPTER_PATH")
 fi
 
-mkdir -p "$DFM_EVALS_RUN_DIR" "$DFM_EVALS_LOG_DIR" "$DFM_EVALS_SERVER_LOG_DIR"
+mkdir -p \
+  "$DFM_EVALS_RUN_DIR" \
+  "$DFM_EVALS_LOG_DIR" \
+  "$DFM_EVALS_SERVER_LOG_DIR"
 TARGET_SERVER_LOG="$DFM_EVALS_SERVER_LOG_DIR/target-vllm-${SLURM_JOB_ID_SAFE}.log"
 JUDGE_SERVER_LOG="$DFM_EVALS_SERVER_LOG_DIR/judge-vllm-${SLURM_JOB_ID_SAFE}.log"
 
@@ -689,8 +714,10 @@ if [[ "$DFM_EVALS_MODEL" == vllm/* || "$DFM_EVALS_TARGET_MODEL" == vllm/* || "$D
     "$LORA_TOKENIZER_PATH" \
     "$TARGET_ENABLE_AUTO_TOOL_CHOICE" \
     "$TARGET_TOOL_CALL_PARSER" \
+    "$TARGET_CHAT_TEMPLATE_KWARGS_JSON" \
     "$TARGET_ENFORCE_EAGER" \
-    "$TARGET_SERVER_LOG"
+    "$TARGET_SERVER_LOG" \
+    "$TARGET_SERVER_CACHE_ROOT"
 fi
 
 if [[ "$JUDGE_SERVER_ENABLED" == "1" ]]; then
@@ -715,8 +742,10 @@ if [[ "$JUDGE_SERVER_ENABLED" == "1" ]]; then
     "$JUDGE_LORA_TOKENIZER_PATH" \
     "$JUDGE_ENABLE_AUTO_TOOL_CHOICE" \
     "$JUDGE_TOOL_CALL_PARSER" \
+    "$JUDGE_CHAT_TEMPLATE_KWARGS_JSON" \
     "$JUDGE_ENFORCE_EAGER" \
-    "$JUDGE_SERVER_LOG"
+    "$JUDGE_SERVER_LOG" \
+    "$JUDGE_SERVER_CACHE_ROOT"
 fi
 
 if [[ -n "$TARGET_VLLM_URL" ]]; then
@@ -746,6 +775,11 @@ build_model_info_overrides DFM_EVALS_MODEL_INFO_OVERRIDES
 printf -v DFM_EVALS_CACHE_DIR_Q '%q' "$DFM_EVALS_CACHE_DIR"
 printf -v DFM_EVALS_RUN_DIR_Q '%q' "$DFM_EVALS_RUN_DIR"
 printf -v DFM_EVALS_LOG_DIR_Q '%q' "$DFM_EVALS_LOG_DIR"
+printf -v DFM_EVALS_XDG_CACHE_HOME_Q '%q' "$DFM_EVALS_XDG_CACHE_HOME"
+printf -v DFM_EVALS_XDG_DATA_HOME_Q '%q' "$DFM_EVALS_XDG_DATA_HOME"
+printf -v DFM_EVALS_TRITON_CACHE_DIR_Q '%q' "$DFM_EVALS_TRITON_CACHE_DIR"
+printf -v DFM_EVALS_TORCHINDUCTOR_CACHE_DIR_Q '%q' "$DFM_EVALS_TORCHINDUCTOR_CACHE_DIR"
+printf -v DFM_EVALS_MODAL_ENABLE_OUTPUT_Q '%q' "$DFM_EVALS_MODAL_ENABLE_OUTPUT"
 printf -v TARGET_VLLM_URL_Q '%q' "${TARGET_VLLM_URL:-}"
 printf -v TARGET_SERVER_API_KEY_Q '%q' "${TARGET_SERVER_API_KEY:-}"
 printf -v OPENAI_BASE_URL_Q '%q' "${OPENAI_BASE_URL:-}"
@@ -757,8 +791,16 @@ if [[ -n "$DFM_EVALS_MODEL_INFO_OVERRIDES" && "$DFM_EVALS_MODEL_INFO_OVERRIDES" 
 fi
 
 RUN_CMD="$(render_env)
-export XDG_CACHE_HOME=${DFM_EVALS_CACHE_DIR_Q}
+export XDG_CACHE_HOME=${DFM_EVALS_XDG_CACHE_HOME_Q}
+export XDG_DATA_HOME=${DFM_EVALS_XDG_DATA_HOME_Q}
+export TRITON_CACHE_DIR=${DFM_EVALS_TRITON_CACHE_DIR_Q}
+export TORCHINDUCTOR_CACHE_DIR=${DFM_EVALS_TORCHINDUCTOR_CACHE_DIR_Q}
+export DFM_EVALS_MODAL_ENABLE_OUTPUT=${DFM_EVALS_MODAL_ENABLE_OUTPUT_Q}
 mkdir -p ${DFM_EVALS_CACHE_DIR_Q}
+mkdir -p ${DFM_EVALS_XDG_CACHE_HOME_Q}
+mkdir -p ${DFM_EVALS_XDG_DATA_HOME_Q}
+mkdir -p ${DFM_EVALS_TRITON_CACHE_DIR_Q}
+mkdir -p ${DFM_EVALS_TORCHINDUCTOR_CACHE_DIR_Q}
 mkdir -p ${DFM_EVALS_RUN_DIR_Q}
 mkdir -p ${DFM_EVALS_LOG_DIR_Q}
 if [[ -n ${TARGET_VLLM_URL_Q} ]]; then
@@ -796,6 +838,7 @@ echo "Target GPU_MEM: $GPU_MEM"
 echo "Target visible devices: ${TARGET_VISIBLE_DEVICES:-<all>}"
 echo "Target auto tool choice: $TARGET_ENABLE_AUTO_TOOL_CHOICE"
 echo "Target tool call parser: ${TARGET_TOOL_CALL_PARSER:-<none>}"
+echo "Target chat template kwargs: ${TARGET_CHAT_TEMPLATE_KWARGS_JSON:-<none>}"
 echo "Target enforce eager: $TARGET_ENFORCE_EAGER"
 echo "Judge server enabled: $JUDGE_SERVER_ENABLED"
 if [[ "$JUDGE_SERVER_ENABLED" == "1" ]]; then
@@ -808,6 +851,7 @@ if [[ "$JUDGE_SERVER_ENABLED" == "1" ]]; then
   echo "Judge visible devices: ${JUDGE_VISIBLE_DEVICES:-<all>}"
   echo "Judge auto tool choice: $JUDGE_ENABLE_AUTO_TOOL_CHOICE"
   echo "Judge tool call parser: ${JUDGE_TOOL_CALL_PARSER:-<none>}"
+  echo "Judge chat template kwargs: ${JUDGE_CHAT_TEMPLATE_KWARGS_JSON:-<none>}"
   echo "Judge enforce eager: $JUDGE_ENFORCE_EAGER"
 fi
 echo "Target LoRA enabled: $USE_LORA_ADAPTER"
@@ -829,6 +873,10 @@ if [[ "$JUDGE_USE_LORA_ADAPTER" == "1" ]]; then
   echo "Judge LoRA tokenizer path: ${JUDGE_LORA_TOKENIZER_PATH:-<none>}"
 fi
 echo "HF_HOME: $HF_HOME"
+echo "XDG cache home: $DFM_EVALS_XDG_CACHE_HOME"
+echo "XDG data home: $DFM_EVALS_XDG_DATA_HOME"
+echo "Triton cache dir: $DFM_EVALS_TRITON_CACHE_DIR"
+echo "TorchInductor cache dir: $DFM_EVALS_TORCHINDUCTOR_CACHE_DIR"
 echo "Run dir: $DFM_EVALS_RUN_DIR"
 echo "Log dir: $DFM_EVALS_LOG_DIR"
 echo "vLLM server log dir: $DFM_EVALS_SERVER_LOG_DIR"
@@ -843,9 +891,10 @@ fi
 echo "Export EEE: $DFM_EVALS_EXPORT_EEE"
 if [[ "$DFM_EVALS_EXPORT_EEE" == "1" ]]; then
   echo "EEE output dir: $DFM_EVALS_EEE_OUTPUT_DIR"
-  echo "EEE source org: $DFM_EVALS_EEE_SOURCE_ORGANIZATION_NAME"
-  echo "EEE evaluator relationship: $DFM_EVALS_EEE_EVALUATOR_RELATIONSHIP"
+echo "EEE source org: $DFM_EVALS_EEE_SOURCE_ORGANIZATION_NAME"
+echo "EEE evaluator relationship: $DFM_EVALS_EEE_EVALUATOR_RELATIONSHIP"
 fi
+echo "Modal enable output: $DFM_EVALS_MODAL_ENABLE_OUTPUT"
 
 echo "Running dfm-evals suite with externally managed vLLM backend(s)..."
 singularity exec --rocm "${SING_BIND_ARGS[@]}" "$SIF" bash -lc "$RUN_CMD"
@@ -861,6 +910,14 @@ if [[ "$DFM_EVALS_EXPORT_EEE" == "1" ]]; then
   fi
 
   EXPORT_EEE_CMD="$(render_env)
+export XDG_CACHE_HOME=${DFM_EVALS_XDG_CACHE_HOME_Q}
+export XDG_DATA_HOME=${DFM_EVALS_XDG_DATA_HOME_Q}
+export TRITON_CACHE_DIR=${DFM_EVALS_TRITON_CACHE_DIR_Q}
+export TORCHINDUCTOR_CACHE_DIR=${DFM_EVALS_TORCHINDUCTOR_CACHE_DIR_Q}
+mkdir -p ${DFM_EVALS_XDG_CACHE_HOME_Q}
+mkdir -p ${DFM_EVALS_XDG_DATA_HOME_Q}
+mkdir -p ${DFM_EVALS_TRITON_CACHE_DIR_Q}
+mkdir -p ${DFM_EVALS_TORCHINDUCTOR_CACHE_DIR_Q}
 mkdir -p ${DFM_EVALS_EEE_OUTPUT_DIR_Q}
 command -v evals >/dev/null 2>&1 || { echo 'FATAL: evals not installed in overlay venv'; exit 1; }
 evals eee inspect \

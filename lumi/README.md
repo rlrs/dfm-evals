@@ -185,6 +185,7 @@ For suite runs (`lumi/submit.sh`), the target vLLM server now defaults to:
 
 - `--enable-auto-tool-choice`
 - `--tool-call-parser hermes`
+- `--enable-prefix-caching`
 
 This is only a baseline default. Tool-call parser choice is model-dependent and
 must match the model's tool-call output format.
@@ -195,18 +196,48 @@ Override per run:
 ./lumi/submit.sh --target-tool-call-parser qwen3
 ./lumi/submit.sh --target-disable-auto-tool-choice
 ./lumi/submit.sh --target-enable-auto-tool-choice --target-tool-call-parser llama3_json
+./lumi/submit.sh --target-tool-call-parser qwen3_coder --target-chat-template-kwargs-json '{"enable_thinking":false}'
 ```
 
 Judge server controls (when `--judge-server` is used):
 
 ```bash
 ./lumi/submit.sh --judge-enable-auto-tool-choice --judge-tool-call-parser hermes
+./lumi/submit.sh --judge-tool-call-parser qwen3_coder --judge-chat-template-kwargs-json '{"enable_thinking":false}'
 ```
 
 For reliable tool calling, your model/template should explicitly handle tool
 schemas and tool-call turns (`tools`, assistant `tool_calls`, and `tool` role
 messages). A plain chat-only template will not be sufficient for robust
 auto-tool-choice behavior.
+
+## Harbor / OpenThoughts-TBLite
+
+The packaged `openthoughts_tblite` suite is intended for `inspect_harbor` with
+`inspect_sandboxes` Modal sandboxes.
+
+Typical LUMI launch:
+
+```bash
+./lumi/submit.sh \
+  --suite openthoughts_tblite \
+  --model Qwen/Qwen3.5-27B \
+  --ctx 32768 \
+  --limit 10 \
+  --tp 8 --dp 1 \
+  --max-connections 8 \
+  --target-tool-call-parser qwen3_coder \
+  --target-chat-template-kwargs-json '{"enable_thinking":false}' \
+  --modal-enable-output \
+  --extra-args ' -T sandbox_env_name=modal'
+```
+
+Notes:
+
+- The packaged Harbor suite sets `--no-fail-on-error --continue-on-fail --message-limit 100`, so looping samples are recorded without aborting the full run.
+- `--modal-enable-output` is useful when a Harbor task fails while Modal is building its per-sample image. Re-run with that flag to surface Modal build logs in Slurm stdout.
+- `--limit none` omits `--limit` entirely from the forwarded Inspect CLI.
+- The launcher now keeps per-run XDG, Triton, and TorchInductor caches under `/overlay/cache/dfm-evals-<run_label>/...` instead of writing into `$HOME`.
 
 Run with a dedicated judge replica (separate vLLM server + GPUs):
 
@@ -337,6 +368,21 @@ When available, launcher-known inference endpoints are written to EEE metadata
 ```
 
 By default, `view.sh` reads from `logs/evals-logs/`.
+
+For `start`, `view.sh` now auto-detects the run's `XDG_CACHE_HOME` and
+`XDG_DATA_HOME` from Slurm stdout and exports them before launching
+`inspect view`. That allows the viewer to see live pending-sample traces from
+Inspect's sample-buffer SQLite DB, not just the finalized `.eval` zip.
+
+This is most useful for a specific run:
+
+```bash
+./lumi/view.sh start --job-id 16638922
+./lumi/view.sh start --label openthoughts_tblite_qwen35_27b_ctx32768_limit10_tp8
+```
+
+`view.sh list` and `bundle` still operate on the regular log tree; the automatic
+live-trace hookup only applies to `start`.
 
 ## Results Table
 
@@ -493,7 +539,9 @@ ls logs/every_eval_ever/data/
 - `inspect_harbor/*` tasks fail on the current LUMI/Prime path: Harbor emits Docker/Compose sandbox specs, and this repo's built-in `prime` backend does not translate them. Use a Docker-capable runtime or a compose-aware provider such as `inspect_sandboxes` `modal` outside the current LUMI launcher flow.
 - The packaged `openthoughts_tblite` suite now runs Harbor with `--no-fail-on-error --continue-on-fail`, so a single bad sample does not abort the full eval.
 - Harbor sample parallelism follows `--max-connections` unless you explicitly pass `--max-samples`; a smoke run with `--max-connections 1` is intentionally single-sample-at-a-time.
-- The LUMI launcher now exports model-info overrides for custom `vllm/*` served names, so Inspect compaction uses the actual `--ctx` value instead of falling back to `128000`.
+- `inspect_harbor` + Modal fails during image build with missing `COPY` sources: this was caused by `inspect_sandboxes` dropping the Docker build context. See `./modal-patch.md`; the local runtime patch should eventually be upstreamed to `inspect_sandboxes`.
+- The LUMI launcher exports model-info overrides for custom `vllm/*` served names, but Inspect compaction can still fail to resolve some names in practice (observed with `vllm/Qwen/Qwen3.5-*`) and fall back to `128000`. When that happens, a bad sample can still run into `32769 input tokens` errors despite `--ctx 32768`.
+- Harbor live traces are only visible in `inspect view start` when the viewer uses the run's matching XDG data directory. `./lumi/view.sh start --job-id <job_id>` now does that automatically.
 - vLLM startup fails with low free GPU memory: lower `GPU_MEM`, reduce `TP/PP`, or retry on a cleaner node allocation.
 - `view.sh list` shows no runs: new default root is `logs/evals-logs`; for older overlay runs, use `EVAL_LOG_ROOT_HOST=<overlay>/dfm-evals-logs ./lumi/view.sh list`.
 - Wrong EuroEval model due inherited env: pass `--euroeval-model` explicitly (recommended for reproducibility).
