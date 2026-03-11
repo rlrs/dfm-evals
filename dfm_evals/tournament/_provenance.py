@@ -44,7 +44,7 @@ def resolve_tournament_project_id(
 
     return default_project_id(
         config.contestant_models,
-        [prompt.id for prompt in config.prompts],
+        config.prompts,
         seed=config.seed,
     )
 

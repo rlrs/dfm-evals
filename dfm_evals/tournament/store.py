@@ -168,7 +168,6 @@ class TournamentStore(AbstractContextManager["TournamentStore"]):
 
     def initialize_from_config(self, config: TournamentConfig) -> None:
         conn = self.connection()
-        prompt_ids = [prompt.id for prompt in config.prompts]
         active_model_ids = {model_id(name) for name in config.contestant_models}
 
         with self.transaction():
@@ -225,9 +224,7 @@ class TournamentStore(AbstractContextManager["TournamentStore"]):
                 if existing_project_id is not None
                 else (
                     config.project_id
-                    or default_project_id(
-                        config.contestant_models, prompt_ids, seed=config.seed
-                    )
+                    or default_project_id(config.contestant_models, config.prompts, seed=config.seed)
                 )
             )
             self.set_run_state("project_id", project_id, commit=False)

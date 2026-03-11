@@ -1,5 +1,6 @@
 import hashlib
-from typing import Literal, Sequence
+import json
+from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -81,13 +82,41 @@ def match_id(
 
 
 def default_project_id(
-    models: Sequence[str], prompt_ids: Sequence[str], seed: int | None = None
+    models: Sequence[str],
+    prompts: Sequence[Any],
+    seed: int | None = None,
 ) -> str:
-    """Create a stable project identifier from config-defining fields."""
+    """Create a stable project identifier from generation-defining fields."""
     model_part = ",".join(sorted(models))
-    prompt_part = ",".join(sorted(prompt_ids))
+    prompt_part = ",".join(sorted(_project_prompt_part(prompt) for prompt in prompts))
     seed_part = "" if seed is None else str(seed)
     return deterministic_id("project", model_part, prompt_part, seed_part, length=20)
+
+
+def _project_prompt_part(prompt: Any) -> str:
+    if isinstance(prompt, str):
+        payload = {"id": prompt}
+        return _canonical_json(payload)
+
+    prompt_id: Any
+    prompt_text: Any
+    if isinstance(prompt, Mapping):
+        prompt_id = prompt.get("id")
+        prompt_text = prompt.get("text")
+    else:
+        prompt_id = getattr(prompt, "id", None)
+        prompt_text = getattr(prompt, "text", None)
+
+    if not isinstance(prompt_id, str) or prompt_id.strip() == "":
+        raise ValueError("prompt must include a non-empty string id")
+    if not isinstance(prompt_text, str):
+        raise ValueError("prompt must include a string text value")
+
+    return _canonical_json({"id": prompt_id, "text": prompt_text})
+
+
+def _canonical_json(value: Mapping[str, Any]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 class ModelRating(BaseModel):

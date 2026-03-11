@@ -99,12 +99,36 @@ def test_resolve_tournament_project_id_prefers_persisted_state_id(tmp_path: Path
     resolved_project_id = modules["resolve_tournament_project_id"](updated)
     new_default_project_id = modules["default_project_id"](
         updated.contestant_models,
-        [prompt.id for prompt in updated.prompts],
+        updated.prompts,
         seed=updated.seed,
     )
 
     assert resolved_project_id != new_default_project_id
     assert resolved_project_id == modules["resolve_tournament_project_id"](config)
+
+
+def test_default_project_id_changes_when_prompt_text_changes(tmp_path: Path) -> None:
+    modules = _tournament_modules()
+    TournamentPrompt = modules["TournamentPrompt"]
+    config = _config(tmp_path, ["model/A", "model/B"])
+    updated = config.model_copy(
+        update={"prompts": [TournamentPrompt(id="prompt-1", text="Updated prompt text")]}
+    )
+
+    original_project_id = modules["default_project_id"](
+        config.contestant_models,
+        config.prompts,
+        seed=config.seed,
+    )
+    updated_project_id = modules["default_project_id"](
+        updated.contestant_models,
+        updated.prompts,
+        seed=updated.seed,
+    )
+
+    assert original_project_id != updated_project_id
+    assert modules["resolve_tournament_project_id"](config) == original_project_id
+    assert modules["resolve_tournament_project_id"](updated) == updated_project_id
 
 
 def test_run_generation_uses_persisted_project_id_in_metadata(
@@ -344,3 +368,61 @@ def test_index_generation_responses_requires_matching_provenance(
 
     assert row is not None
     assert row["response_text"] == "expected"
+
+
+def test_index_generation_responses_rejects_stale_logs_when_prompt_text_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    modules = _tournament_modules()
+    TournamentPrompt = modules["TournamentPrompt"]
+    config = _config(tmp_path, ["model/A", "model/B"])
+    updated = config.model_copy(
+        update={"prompts": [TournamentPrompt(id="prompt-1", text="Updated prompt text")]}
+    )
+    stale_project_id = modules["resolve_tournament_project_id"](config)
+    indexer_module = sys.modules["dfm_evals.tournament.indexer"]
+
+    stale_log = SimpleNamespace(
+        name=(updated.generation_log_dir / "stale.eval").as_posix(),
+        mtime=100.0,
+    )
+
+    monkeypatch.setattr(indexer_module, "list_eval_logs", lambda path: [stale_log])
+    monkeypatch.setattr(
+        indexer_module,
+        "read_eval_log",
+        lambda log_info, header_only=True: SimpleNamespace(
+            eval=SimpleNamespace(
+                task=modules["GENERATION_TASK_NAME"],
+                model="model/A",
+                metadata={
+                    modules["TOURNAMENT_PHASE_KEY"]: modules["GENERATION_PHASE"],
+                    modules["TOURNAMENT_PROJECT_KEY"]: stale_project_id,
+                },
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        indexer_module,
+        "read_eval_log_samples",
+        lambda log_info, all_samples_required=False: [
+            SimpleNamespace(
+                metadata={"prompt_id": "prompt-1"},
+                id="prompt-1",
+                output=SimpleNamespace(completion="stale completion"),
+                uuid="uuid-stale",
+            )
+        ],
+    )
+
+    report = modules["index_generation_responses"](updated)
+
+    assert report.logs_seen == 1
+    assert report.logs_processed == 0
+    assert report.logs_skipped_provenance == 1
+    assert report.responses_inserted == 0
+    assert report.missing_by_model == {
+        "model/A": ["prompt-1"],
+        "model/B": ["prompt-1"],
+    }
