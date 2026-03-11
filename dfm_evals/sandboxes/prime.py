@@ -30,6 +30,9 @@ if TYPE_CHECKING:
 
 
 DEFAULT_PRIME_CONFIG_FILES = [
+    "configs/sandboxes/prime-sandbox.yaml",
+    "configs/sandboxes/prime-sandbox.yml",
+    "configs/sandboxes/prime-sandbox.json",
     "prime-sandbox.yaml",
     "prime-sandbox.yml",
     "prime-sandbox.json",

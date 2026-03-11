@@ -95,10 +95,10 @@ With explicit config file:
 PRIME_API_KEY=... \
 uv run evals run dfm_evals/multi_wiki_qa \
   --model openai/gpt-5-mini \
-  --sandbox "prime:$(pwd)/prime-sandbox.yaml"
+  --sandbox "prime:$(pwd)/configs/sandboxes/prime-sandbox.yaml"
 ```
 
-Example `prime-sandbox.yaml`:
+Example [`configs/sandboxes/prime-sandbox.yaml`](configs/sandboxes/prime-sandbox.yaml):
 
 ```yaml
 docker_image: python:3.11-slim
