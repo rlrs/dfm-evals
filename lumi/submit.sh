@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/artifact_root.sh"
+source "$SCRIPT_DIR/laif_runtime.sh"
 POST_ARTIFACT_ROOT="$(resolve_post_artifact_root "$REPO_ROOT")"
 export POST_ARTIFACT_ROOT
 DEFAULT_SUBMIT_SCRIPT="$SCRIPT_DIR/run_suite.sbatch"
@@ -19,10 +20,8 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 SUBMIT_SCRIPT=${SUBMIT_SCRIPT:-$DEFAULT_SUBMIT_SCRIPT}
-OVERLAY_DIR=${OVERLAY_DIR:-$REPO_ROOT/overlay_vllm_minimal}
-if [[ ! -d "$OVERLAY_DIR" && -d "$REPO_ROOT/../overlay_vllm_minimal" ]]; then
-  OVERLAY_DIR="$REPO_ROOT/../overlay_vllm_minimal"
-fi
+BASE_DIR=/pfs/lustref1/appl/local/laifs
+OVERLAY_DIR=${OVERLAY_DIR:-$(dfm_lumi_default_overlay_dir)}
 DFM_EVALS_RUN_ROOT=${DFM_EVALS_RUN_ROOT:-$POST_ARTIFACT_ROOT/evals/runs}
 DFM_EVALS_LOG_ROOT=${DFM_EVALS_LOG_ROOT:-$POST_ARTIFACT_ROOT/evals/logs}
 

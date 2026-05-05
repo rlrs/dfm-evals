@@ -20,17 +20,16 @@ set -euo pipefail
 
 REPO_ROOT="${DFM_EVALS_REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(pwd)}}"
 SCRIPT_DIR="$REPO_ROOT/lumi"
+source "$SCRIPT_DIR/laif_runtime.sh"
 source "$SCRIPT_DIR/artifact_root.sh"
 POST_ARTIFACT_ROOT="$(resolve_post_artifact_root "$REPO_ROOT")"
 export POST_ARTIFACT_ROOT
 
 BASE_DIR=/pfs/lustref1/appl/local/laifs
 LAIFS_APPL_DIR=/appl/local/laifs
-SIF=${SIF:-$BASE_DIR/containers/lumi-multitorch-u24r64f21m43t29-20260216_093549/lumi-multitorch-full-u24r64f21m43t29-20260216_093549.sif}
-OVERLAY_DIR=${OVERLAY_DIR:-$REPO_ROOT/overlay_vllm_minimal}
-if [[ ! -d "$OVERLAY_DIR" && -d "$REPO_ROOT/../overlay_vllm_minimal" ]]; then
-  OVERLAY_DIR="$REPO_ROOT/../overlay_vllm_minimal"
-fi
+SIF=${SIF:-$(dfm_lumi_default_sif)}
+OVERLAY_DIR=${OVERLAY_DIR:-$(dfm_lumi_default_overlay_dir)}
+SINGULARITY_GPU_MODE=${SINGULARITY_GPU_MODE:-$(dfm_lumi_default_gpu_mode "$SIF")}
 
 MODEL=${MODEL:-google/gemma-3-4b-it}
 DFM_EVALS_MODEL=${DFM_EVALS_MODEL:-vllm/$MODEL}
@@ -603,9 +602,6 @@ if [[ -n "${ROCR_VISIBLE_DEVICES:-}" && -z "${HIP_VISIBLE_DEVICES:-}" ]]; then
 fi
 unset ROCR_VISIBLE_DEVICES
 export HF_HOME="__HF_HOME_CONTAINER__"
-export HF_HUB_CACHE="${HF_HOME%/}/hub"
-export TRANSFORMERS_CACHE="${HF_HOME%/}/transformers"
-export HF_DATASETS_CACHE="${HF_HOME%/}/datasets"
 EOC
 }
 
@@ -692,7 +688,7 @@ python -m dfm_evals.vllm_serve serve \"\${MODEL_TAG}\" \\
   \"\${EXTRA_VLLM_FLAGS[@]}\""
 
   echo "Starting $name server on :$port (log: $log_file)"
-  singularity exec --rocm "${SING_BIND_ARGS[@]}" "$SIF" \
+  singularity exec "${SINGULARITY_GPU_ARGS[@]}" "${SING_BIND_ARGS[@]}" "$SIF" \
     env \
       MODEL_TAG="$model_tag" \
       SERVED_MODEL_NAME="$served_model_name" \
@@ -768,6 +764,7 @@ trap cleanup EXIT
 
 [[ -f "$SIF" ]] || die "SIF not found: $SIF"
 [[ -d "$OVERLAY_DIR/venv/vllm-min" ]] || die "overlay venv missing: $OVERLAY_DIR/venv/vllm-min"
+dfm_lumi_init_gpu_args
 if [[ -n "$DFM_EVALS_SUITES_FILE" ]]; then
   DFM_EVALS_SUITES_FILE="$(readlink -f "$DFM_EVALS_SUITES_FILE" 2>/dev/null || true)"
   [[ -n "$DFM_EVALS_SUITES_FILE" ]] || die "unable to resolve suites file path"
@@ -950,6 +947,7 @@ ${EVALS_CMD}"
 
 echo "SIF: $SIF"
 echo "Overlay: $OVERLAY_DIR"
+echo "Singularity GPU mode: $SINGULARITY_GPU_MODE"
 echo "Model: $MODEL"
 echo "Eval model: $DFM_EVALS_MODEL"
 echo "Eval target model: $DFM_EVALS_TARGET_MODEL"
@@ -1030,7 +1028,7 @@ fi
 echo "Modal enable output: $DFM_EVALS_MODAL_ENABLE_OUTPUT"
 
 echo "Running dfm-evals suite with externally managed vLLM backend(s)..."
-singularity exec --rocm "${SING_BIND_ARGS[@]}" "$SIF" bash -lc "$RUN_CMD"
+singularity exec "${SINGULARITY_GPU_ARGS[@]}" "${SING_BIND_ARGS[@]}" "$SIF" bash -lc "$RUN_CMD"
 echo "dfm-evals suite complete."
 
 if [[ "$DFM_EVALS_EXPORT_EEE" == "1" ]]; then
@@ -1072,7 +1070,7 @@ python -m dfm_evals.cli eee inspect \
   --evaluator-relationship ${DFM_EVALS_EEE_EVALUATOR_RELATIONSHIP_Q}${DFM_EVALS_EEE_INFERENCE_ARGS}"
 
   echo "Exporting Inspect logs to every_eval_ever format..."
-  singularity exec --rocm "${SING_BIND_ARGS[@]}" "$SIF" bash -lc "$EXPORT_EEE_CMD"
+  singularity exec "${SINGULARITY_GPU_ARGS[@]}" "${SING_BIND_ARGS[@]}" "$SIF" bash -lc "$EXPORT_EEE_CMD"
   echo "EEE export complete: $DFM_EVALS_EEE_OUTPUT_DIR"
 else
   echo "DFM_EVALS_EXPORT_EEE=0, skipping EEE export."

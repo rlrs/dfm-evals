@@ -19,17 +19,16 @@ set -euo pipefail
 
 REPO_ROOT="${DFM_EVALS_REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(pwd)}}"
 SCRIPT_DIR="$REPO_ROOT/lumi"
+source "$SCRIPT_DIR/laif_runtime.sh"
 source "$SCRIPT_DIR/artifact_root.sh"
 POST_ARTIFACT_ROOT="$(resolve_post_artifact_root "$REPO_ROOT")"
 export POST_ARTIFACT_ROOT
 
 BASE_DIR=/pfs/lustref1/appl/local/laifs
 LAIFS_APPL_DIR=/appl/local/laifs
-SIF=${SIF:-$BASE_DIR/containers/lumi-multitorch-u24r64f21m43t29-20260216_093549/lumi-multitorch-full-u24r64f21m43t29-20260216_093549.sif}
-OVERLAY_DIR=${OVERLAY_DIR:-$REPO_ROOT/overlay_vllm_minimal}
-if [[ ! -d "$OVERLAY_DIR" && -d "$REPO_ROOT/../overlay_vllm_minimal" ]]; then
-  OVERLAY_DIR="$REPO_ROOT/../overlay_vllm_minimal"
-fi
+SIF=${SIF:-$(dfm_lumi_default_sif)}
+OVERLAY_DIR=${OVERLAY_DIR:-$(dfm_lumi_default_overlay_dir)}
+SINGULARITY_GPU_MODE=${SINGULARITY_GPU_MODE:-$(dfm_lumi_default_gpu_mode "$SIF")}
 
 PHASE=${DFM_TOURNAMENT_PHASE:-all}
 CONFIG=${DFM_TOURNAMENT_CONFIG:-}
@@ -270,9 +269,6 @@ if [[ -n "${ROCR_VISIBLE_DEVICES:-}" && -z "${HIP_VISIBLE_DEVICES:-}" ]]; then
 fi
 unset ROCR_VISIBLE_DEVICES
 export HF_HOME="__HF_HOME__"
-export HF_HUB_CACHE="${HF_HOME%/}/hub"
-export TRANSFORMERS_CACHE="${HF_HOME%/}/transformers"
-export HF_DATASETS_CACHE="${HF_HOME%/}/datasets"
 if [[ -n "${DFM_EVALS_OPENAI_BASE_URL:-}" ]]; then
   export OPENAI_BASE_URL="${DFM_EVALS_OPENAI_BASE_URL}"
 fi
@@ -329,6 +325,7 @@ append_bind_path() {
 init_singularity_binds() {
   [[ -f "$SIF" ]] || die "SIF not found: $SIF"
   [[ -d "$OVERLAY_DIR/venv/vllm-min" ]] || die "overlay venv missing: $OVERLAY_DIR/venv/vllm-min"
+  dfm_lumi_init_gpu_args
 
   SING_BIND_ARGS=(
     -B "$BASE_DIR:$LAIFS_APPL_DIR"
@@ -383,7 +380,7 @@ init_singularity_binds() {
 
 run_container_script() {
   local script="$1"
-  singularity exec --rocm "${SING_BIND_ARGS[@]}" "$SIF" bash -lc "$script"
+  singularity exec "${SINGULARITY_GPU_ARGS[@]}" "${SING_BIND_ARGS[@]}" "$SIF" bash -lc "$script"
 }
 
 run_overlay_python() {
@@ -788,7 +785,7 @@ vllm serve \"\${MODEL_TAG}\" \\
       --nodelist="$selected_node_list" \
       --output="$rank_log_path" \
       --error="$rank_log_path" \
-      singularity exec --rocm "${SING_BIND_ARGS[@]}" "$SIF" \
+      singularity exec "${SINGULARITY_GPU_ARGS[@]}" "${SING_BIND_ARGS[@]}" "$SIF" \
       env \
         MODEL_TAG="$model_tag" \
         SERVED_MODEL_NAME="$served_model_name" \
@@ -828,7 +825,7 @@ vllm serve \"\${MODEL_TAG}\" \\
         bash -lc "$server_cmd" \
         >"$log_path" 2>&1 &
   else
-    singularity exec --rocm "${SING_BIND_ARGS[@]}" "$SIF" \
+    singularity exec "${SINGULARITY_GPU_ARGS[@]}" "${SING_BIND_ARGS[@]}" "$SIF" \
       env \
         MODEL_TAG="$model_tag" \
         SERVED_MODEL_NAME="$served_model_name" \
@@ -1381,6 +1378,7 @@ fi
 
 echo "SIF: $SIF"
 echo "Overlay: $OVERLAY_DIR"
+echo "Singularity GPU mode: $SINGULARITY_GPU_MODE"
 echo "Phase: $PHASE"
 echo "Allocated nodes: ${NODES[*]}"
 echo "Head node: $HEAD_NODE"

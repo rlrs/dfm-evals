@@ -6,12 +6,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BASE_DIR=/pfs/lustref1/appl/local/laifs
 LAIFS_APPL_DIR=/appl/local/laifs
+source "$SCRIPT_DIR/laif_runtime.sh"
 
-: "${SIF:=$BASE_DIR/containers/lumi-multitorch-u24r64f21m43t29-20260216_093549/lumi-multitorch-full-u24r64f21m43t29-20260216_093549.sif}"
-: "${OVERLAY_DIR:=$REPO_ROOT/overlay_vllm_minimal}"
-if [[ ! -d "$OVERLAY_DIR" && -d "$REPO_ROOT/../overlay_vllm_minimal" ]]; then
-  OVERLAY_DIR="$REPO_ROOT/../overlay_vllm_minimal"
-fi
+: "${SIF:=$(dfm_lumi_default_sif)}"
+: "${OVERLAY_DIR:=$(dfm_lumi_default_overlay_dir)}"
+: "${SINGULARITY_GPU_MODE:=$(dfm_lumi_default_gpu_mode "$SIF")}"
 
 EXTRAS=""
 NO_DEPS_SET=0
@@ -74,6 +73,7 @@ done
 
 [[ -f "$SIF" ]] || die "SIF not found: $SIF"
 [[ -d "$OVERLAY_DIR/venv/vllm-min" ]] || die "overlay venv missing: $OVERLAY_DIR/venv/vllm-min"
+dfm_lumi_init_gpu_args
 
 INSTALL_TARGET="."
 if [[ -n "$EXTRAS" ]]; then
@@ -113,7 +113,7 @@ if [[ "$NO_DEPS_SET" != "1" ]]; then
     uv "${UV_EXPORT_ARGS[@]}"
   )
 
-  python - "$REQ_EXPORT_FILE_HOST" <<'PY'
+  python3 - "$REQ_EXPORT_FILE_HOST" <<'PY'
 from pathlib import Path
 import sys
 
@@ -185,6 +185,7 @@ fi
 
 echo "+ SIF: $SIF"
 echo "+ Overlay: $OVERLAY_DIR"
+echo "+ Singularity GPU mode: $SINGULARITY_GPU_MODE"
 echo "+ Repo: $REPO_ROOT"
 echo "+ Install target: $INSTALL_TARGET"
 if [[ "$NO_DEPS_SET" == "1" ]]; then
@@ -206,7 +207,7 @@ if [[ -f "$OVERLAY_DIR/overlay-runtime.binds" ]]; then
   done < "$OVERLAY_DIR/overlay-runtime.binds"
 fi
 
-singularity exec --rocm \
+singularity exec "${SINGULARITY_GPU_ARGS[@]}" \
   "${SING_BIND_ARGS[@]}" \
   "$SIF" bash -lc "$INSTALL_CMD"
 
