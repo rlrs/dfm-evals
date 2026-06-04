@@ -41,6 +41,11 @@ VIEW_OVERWRITE=${VIEW_OVERWRITE:-1}
 VIEW_RUN_LABEL=${VIEW_RUN_LABEL:-}
 VIEW_XDG_CACHE_HOME=${VIEW_XDG_CACHE_HOME:-}
 VIEW_XDG_DATA_HOME=${VIEW_XDG_DATA_HOME:-}
+VIEW_LIST_FILTER=${VIEW_LIST_FILTER:-}
+VIEW_MATCH_QUERY=${VIEW_MATCH_QUERY:-}
+VIEW_MATCH_KIND=${VIEW_MATCH_KIND:-}
+VIEW_MATCH_COUNT=${VIEW_MATCH_COUNT:-0}
+VIEW_MATCHED_RUN_LABEL=${VIEW_MATCHED_RUN_LABEL:-}
 HF_HOME=${HF_HOME:-/scratch/project_465002183/.cache/huggingface}
 PASSTHROUGH_ARGS=()
 
@@ -49,7 +54,7 @@ usage() {
 Usage:
   ./lumi/view.sh [start] [selector options] [-- inspect view start args...]
   ./lumi/view.sh bundle [selector options] [-- inspect view bundle args...]
-  ./lumi/view.sh list
+  ./lumi/view.sh list [query]
 
 Selector options:
   --all                Use all runs (default, $POST_ARTIFACT_ROOT/evals/logs)
@@ -57,12 +62,16 @@ Selector options:
   --job-id <id>        Use run dir matching *__job-<id>, <id>, or
                        slurm label file *-<id>.out/.err
   --label <run_label>  Use <eval-log-root>/<run_label>
+  --match <query>      Use newest run dir whose label matches <query>
+                       (exact, then prefix, then substring; case-insensitive)
   --log-dir <path>     Use explicit log dir path:
                        - host path under eval log root (auto-mapped)
                        - /overlay/... path
                        - host path under OVERLAY_DIR (auto-mapped to /overlay)
                        - absolute host path (auto bind-mounted)
                        - bare name treated as run label
+  <query>              Bare query is shorthand for --match <query> in start/bundle
+                       and a filter in list mode
 
 General options:
   --host <ip>          Viewer bind host (default: 127.0.0.1)
@@ -88,8 +97,11 @@ Examples:
   ./lumi/view.sh list
   ./lumi/view.sh start --latest
   ./lumi/view.sh start --job-id 16316016
+  ./lumi/view.sh start qwen
+  ./lumi/view.sh start --match tblite
   ./lumi/view.sh start --label fundamentals__vllm_google_gemma-3-4b-it__job-16316016
   ./lumi/view.sh start --job-id 16636687  # auto-loads XDG data/cache for live traces
+  ./lumi/view.sh list qwen
   ./lumi/view.sh bundle --latest --output-dir ./view-bundle-latest
 EOF
 }
@@ -107,24 +119,48 @@ need_option_value() {
   fi
 }
 
-list_runs() {
+run_entries() {
   [[ -d "$EVAL_LOG_ROOT_HOST" ]] || die "eval logs root not found: $EVAL_LOG_ROOT_HOST"
+  find "$EVAL_LOG_ROOT_HOST" -mindepth 1 -maxdepth 1 -type d -printf '%T@|%f\n' \
+    | sort -t'|' -k1,1nr
+}
+
+list_runs() {
+  local filter="${1:-}"
+  [[ -d "$EVAL_LOG_ROOT_HOST" ]] || die "eval logs root not found: $EVAL_LOG_ROOT_HOST"
+  local filter_lc=""
+  if [[ -n "$filter" ]]; then
+    filter_lc="${filter,,}"
+  fi
   mapfile -t entries < <(
     find "$EVAL_LOG_ROOT_HOST" -mindepth 1 -maxdepth 1 -type d -printf '%T@|%f\n' \
       | sort -t'|' -k1,1nr
   )
-  echo "Available runs under $EVAL_LOG_ROOT_HOST (newest first):"
+  if [[ -n "$filter" ]]; then
+    echo "Available runs under $EVAL_LOG_ROOT_HOST matching '$filter' (newest first):"
+  else
+    echo "Available runs under $EVAL_LOG_ROOT_HOST (newest first):"
+  fi
   if [[ "${#entries[@]}" -eq 0 ]]; then
     echo "  (none)"
     return
   fi
+  local shown=0
   for entry in "${entries[@]}"; do
     local ts_epoch="${entry%%|*}"
     local run_name="${entry#*|}"
+    local run_name_lc="${run_name,,}"
+    if [[ -n "$filter_lc" && "$run_name_lc" != *"$filter_lc"* ]]; then
+      continue
+    fi
     local ts_text
     ts_text="$(date -d "@${ts_epoch%.*}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || printf '%s' "$ts_epoch")"
     printf '  %s  %s\n' "$ts_text" "$run_name"
+    shown=1
   done
+  if [[ "$shown" == "0" ]]; then
+    echo "  (none)"
+  fi
 }
 
 run_dir_for_latest() {
@@ -177,6 +213,71 @@ run_dir_for_job_id() {
   fi
   [[ -n "$match" ]] || die "no run directory found for job id $job_id under $EVAL_LOG_ROOT_HOST"
   printf '%s' "$match"
+}
+
+run_dir_for_match() {
+  local query="$1"
+  local query_lc="${query,,}"
+  local entry=""
+  local run_name=""
+  local run_name_lc=""
+  local -a exact_matches=()
+  local -a prefix_matches=()
+  local -a substring_matches=()
+
+  if [[ -d "$EVAL_LOG_ROOT_HOST/$query" ]]; then
+    VIEW_MATCH_QUERY="$query"
+    VIEW_MATCH_KIND="label"
+    VIEW_MATCH_COUNT=1
+    VIEW_MATCHED_RUN_LABEL="$query"
+    return
+  fi
+
+  if [[ "$query" =~ ^[0-9]+$ ]]; then
+    run_name="$(run_dir_for_job_id "$query")"
+    VIEW_MATCH_QUERY="$query"
+    VIEW_MATCH_KIND="job-id"
+    VIEW_MATCH_COUNT=1
+    VIEW_MATCHED_RUN_LABEL="$run_name"
+    return
+  fi
+
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    run_name="${entry#*|}"
+    run_name_lc="${run_name,,}"
+    if [[ "$run_name_lc" == "$query_lc" ]]; then
+      exact_matches+=("$run_name")
+    elif [[ "$run_name_lc" == "$query_lc"* ]]; then
+      prefix_matches+=("$run_name")
+    elif [[ "$run_name_lc" == *"$query_lc"* ]]; then
+      substring_matches+=("$run_name")
+    fi
+  done < <(run_entries)
+
+  if [[ "${#exact_matches[@]}" -gt 0 ]]; then
+    VIEW_MATCH_QUERY="$query"
+    VIEW_MATCH_KIND="exact"
+    VIEW_MATCH_COUNT="${#exact_matches[@]}"
+    VIEW_MATCHED_RUN_LABEL="${exact_matches[0]}"
+    return
+  fi
+  if [[ "${#prefix_matches[@]}" -gt 0 ]]; then
+    VIEW_MATCH_QUERY="$query"
+    VIEW_MATCH_KIND="prefix"
+    VIEW_MATCH_COUNT="${#prefix_matches[@]}"
+    VIEW_MATCHED_RUN_LABEL="${prefix_matches[0]}"
+    return
+  fi
+  if [[ "${#substring_matches[@]}" -gt 0 ]]; then
+    VIEW_MATCH_QUERY="$query"
+    VIEW_MATCH_KIND="substring"
+    VIEW_MATCH_COUNT="${#substring_matches[@]}"
+    VIEW_MATCHED_RUN_LABEL="${substring_matches[0]}"
+    return
+  fi
+
+  die "no run directory found matching '$query' under $EVAL_LOG_ROOT_HOST"
 }
 
 slurm_stdout_for_run_label() {
@@ -254,6 +355,11 @@ resolve_view_log_dir() {
       [[ -d "$EVAL_LOG_ROOT_HOST/$VIEW_SELECTOR_VALUE" ]] || die "run label not found: $VIEW_SELECTOR_VALUE"
       VIEW_LOG_DIR="$EVAL_LOG_ROOT_CONTAINER/$VIEW_SELECTOR_VALUE"
       ;;
+    match)
+      [[ -n "$VIEW_SELECTOR_VALUE" ]] || die "--match requires a value"
+      run_dir_for_match "$VIEW_SELECTOR_VALUE"
+      VIEW_LOG_DIR="$EVAL_LOG_ROOT_CONTAINER/$VIEW_MATCHED_RUN_LABEL"
+      ;;
     log-dir)
       [[ -n "$VIEW_SELECTOR_VALUE" ]] || die "--log-dir requires a value"
       VIEW_LOG_DIR="$(path_to_container_log_dir "$VIEW_SELECTOR_VALUE")"
@@ -283,6 +389,11 @@ resolve_view_run_label() {
     label)
       VIEW_RUN_LABEL="$VIEW_SELECTOR_VALUE"
       ;;
+    match)
+      [[ -n "$VIEW_SELECTOR_VALUE" ]] || return
+      run_dir_for_match "$VIEW_SELECTOR_VALUE"
+      VIEW_RUN_LABEL="$VIEW_MATCHED_RUN_LABEL"
+      ;;
     log-dir)
       if [[ -n "$VIEW_SELECTOR_VALUE" && "$VIEW_SELECTOR_VALUE" != /* ]]; then
         VIEW_RUN_LABEL="$VIEW_SELECTOR_VALUE"
@@ -294,9 +405,9 @@ resolve_view_run_label() {
 }
 
 resolve_view_xdg_homes() {
-  [[ "$VIEW_MODE" == "start" ]] || return
+  [[ "$VIEW_MODE" == "start" ]] || return 0
   resolve_view_run_label
-  [[ -n "$VIEW_RUN_LABEL" ]] || return
+  [[ -n "$VIEW_RUN_LABEL" ]] || return 0
 
   if [[ -n "$VIEW_XDG_CACHE_HOME" && -n "$VIEW_XDG_DATA_HOME" ]]; then
     return
@@ -338,6 +449,12 @@ if [[ $# -gt 0 ]]; then
       --label)
         need_option_value "--label" "$#"
         VIEW_SELECTOR=label
+        VIEW_SELECTOR_VALUE="$2"
+        shift 2
+        ;;
+      --match)
+        need_option_value "--match" "$#"
+        VIEW_SELECTOR=match
         VIEW_SELECTOR_VALUE="$2"
         shift 2
         ;;
@@ -397,8 +514,17 @@ if [[ $# -gt 0 ]]; then
         break
         ;;
       *)
-        PASSTHROUGH_ARGS+=("$1")
-        shift
+        if [[ "$VIEW_MODE" == "list" && -z "$VIEW_LIST_FILTER" ]]; then
+          VIEW_LIST_FILTER="$1"
+          shift
+        elif [[ "$VIEW_MODE" != "list" && "$VIEW_SELECTOR" == "all" && -z "$VIEW_SELECTOR_VALUE" && -z "$VIEW_LOG_DIR" ]]; then
+          VIEW_SELECTOR=match
+          VIEW_SELECTOR_VALUE="$1"
+          shift
+        else
+          PASSTHROUGH_ARGS+=("$1")
+          shift
+        fi
         ;;
     esac
   done
@@ -409,7 +535,7 @@ fi
 dfm_lumi_init_gpu_args
 
 if [[ "$VIEW_MODE" == "list" ]]; then
-  list_runs
+  list_runs "$VIEW_LIST_FILTER"
   exit 0
 fi
 
@@ -476,7 +602,9 @@ inspect_args=()
 case "$VIEW_MODE" in
   start)
     inspect_args=(view start --log-dir "$VIEW_LOG_DIR" --host "$VIEW_HOST" --port "$VIEW_PORT")
-    if [[ "$VIEW_RECURSIVE" == "1" ]]; then
+    if [[ "$VIEW_RECURSIVE" != "1" ]]; then
+      # inspect's --recursive flag currently inverts the default rather than
+      # enabling it, so omit it for the normal recursive case.
       inspect_args+=(--recursive)
     fi
     inspect_args+=("${PASSTHROUGH_ARGS[@]}")
@@ -504,6 +632,11 @@ echo "Mode: $VIEW_MODE"
 echo "Log dir: $VIEW_LOG_DIR"
 if [[ -n "$VIEW_RUN_LABEL" ]]; then
   echo "Run label: $VIEW_RUN_LABEL"
+fi
+if [[ -n "$VIEW_MATCH_QUERY" ]]; then
+  echo "Match query: $VIEW_MATCH_QUERY"
+  echo "Match kind: $VIEW_MATCH_KIND"
+  echo "Matched runs: $VIEW_MATCH_COUNT (using newest)"
 fi
 if [[ "$VIEW_MODE" == "start" && -n "$VIEW_XDG_DATA_HOME" ]]; then
   echo "XDG cache home: $VIEW_XDG_CACHE_HOME"
