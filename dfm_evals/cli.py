@@ -23,6 +23,8 @@ OPTIONAL_REGISTRY_MODULES = (
 OPTIONAL_IMPORT_DEPENDENCIES = {
     "inspect_sandboxes._registry": {"modal"},
 }
+MODAL_SANDBOX_TIMEOUT_ENV = "DFM_EVALS_MODAL_SANDBOX_TIMEOUT"
+MODAL_SANDBOX_IDLE_TIMEOUT_ENV = "DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT"
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,36 @@ def _resolve_modal_build_context_dir(build: object, compose_dir: Path) -> Path:
     return compose_dir / (getattr(build, "context", None) or ".")
 
 
+def _read_positive_int_env(name: str) -> int | None:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return None
+
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}.") from exc
+
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}.")
+
+    return parsed
+
+
+def _load_modal_sandbox_overrides() -> dict[str, int]:
+    overrides: dict[str, int] = {}
+
+    timeout = _read_positive_int_env(MODAL_SANDBOX_TIMEOUT_ENV)
+    if timeout is not None:
+        overrides["timeout"] = timeout
+
+    idle_timeout = _read_positive_int_env(MODAL_SANDBOX_IDLE_TIMEOUT_ENV)
+    if idle_timeout is not None:
+        overrides["idle_timeout"] = idle_timeout
+
+    return overrides
+
+
 def _patch_inspect_sandboxes_modal_context_dir() -> None:
     module_names = (
         "inspect_sandboxes.modal._compose",
@@ -135,16 +167,16 @@ def _patch_inspect_sandboxes_modal_context_dir() -> None:
             params = original_convert(config, compose_path)
             service = _select_modal_compose_service(config)
             build = getattr(service, "build", None) if service is not None else None
-            if build is None:
-                return params
+            if build is not None:
+                compose_dir = Path(compose_path).parent if compose_path else Path.cwd()
+                dockerfile_path = compose_module.resolve_dockerfile_path(build, compose_dir)
+                context_dir = _resolve_modal_build_context_dir(build, compose_dir)
+                params["image"] = compose_module.modal.Image.from_dockerfile(
+                    str(dockerfile_path),
+                    context_dir=str(context_dir),
+                )
 
-            compose_dir = Path(compose_path).parent if compose_path else Path.cwd()
-            dockerfile_path = compose_module.resolve_dockerfile_path(build, compose_dir)
-            context_dir = _resolve_modal_build_context_dir(build, compose_dir)
-            params["image"] = compose_module.modal.Image.from_dockerfile(
-                str(dockerfile_path),
-                context_dir=str(context_dir),
-            )
+            params.update(_load_modal_sandbox_overrides())
             return params
 
         patched_convert.__dfm_evals_patched__ = True
@@ -666,6 +698,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="Optional provider label to record in exported metadata",
     )
+    eee_inspect_parser.add_argument(
+        "--model-id-override",
+        default=None,
+        help="Optional canonical EEE model id to use instead of deriving it from the runtime model path",
+    )
 
     eee_euroeval_parser = eee_subparsers.add_parser(
         "euroeval",
@@ -886,6 +923,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     eval_library_version=args.eval_library_version,
                     inference_base_url=args.inference_base_url,
                     inference_provider_name=args.inference_provider_name,
+                    model_id_override=args.model_id_override,
                 )
             elif args.eee_command == "euroeval":
                 written = export_euroeval_results(

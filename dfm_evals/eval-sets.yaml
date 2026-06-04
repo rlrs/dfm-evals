@@ -140,6 +140,136 @@ sets:
       - "4242"
       - --temperature
       - "0"
+  final_all:
+    description: Final combined benchmark suite for ~8B instruct models; English, code, and OpenThoughts-TBLite with no suite-level sample limit
+    tasks:
+      - name: inspect_evals/gsm8k
+        args:
+          - --max-tokens
+          - "2048"
+      - name: inspect_evals/ifeval
+        args:
+          - --max-tokens
+          - "3072"
+      - name: inspect_evals/truthfulqa
+        args:
+          - --max-tokens
+          - "512"
+      - inspect_evals/mmlu_0_shot
+      - inspect_evals/mmlu_pro
+      - inspect_evals/arc_easy
+      - inspect_evals/arc_challenge
+      - inspect_evals/hellaswag
+      - name: ruler
+        args:
+          - -T
+          - variant=qa_2
+          - -T
+          - max_seq_length=32768
+          - -T
+          - tokenizer_backend=auto
+          - -T
+          - tokenizer_model={{target_model}}
+          - -T
+          - context_buffer_tokens=256
+      - name: inspect_evals/bfcl
+        args:
+          - --max-tokens
+          - "1024"
+          - --message-limit
+          - "24"
+      - name: inspect_evals/humaneval
+        args:
+          - -T
+          - sandbox=modal
+          - --max-tokens
+          - "2048"
+      - name: mbpp_modal
+        args:
+          - -T
+          - sandbox=modal
+          - --max-tokens
+          - "2048"
+      - name: inspect_harbor/openthoughts_tblite
+        args:
+          - -T
+          - sandbox_env_name=modal
+          - --no-fail-on-error
+          - --continue-on-fail
+          - --message-limit
+          - "100"
+    args:
+      - --model
+      - "{{target_model}}"
+      - --temperature
+      - "0"
+  final_english_core:
+    description: Final benchmark English/general tasks; no suite-level sample limit
+    tasks:
+      - name: inspect_evals/gsm8k
+        args:
+          - --max-tokens
+          - "2048"
+      - name: inspect_evals/ifeval
+        args:
+          - --max-tokens
+          - "3072"
+      - name: inspect_evals/truthfulqa
+        args:
+          - --max-tokens
+          - "512"
+      - inspect_evals/mmlu_0_shot
+      - inspect_evals/mmlu_pro
+      - inspect_evals/arc_easy
+      - inspect_evals/arc_challenge
+      - inspect_evals/hellaswag
+      - name: inspect_evals/bfcl
+        args:
+          - --max-tokens
+          - "1024"
+          - --message-limit
+          - "24"
+    args:
+      - --model
+      - "{{target_model}}"
+      - --temperature
+      - "0"
+  final_code_8b:
+    description: Final benchmark code suite for ~8B instruct models; Modal sandbox-scored and no suite-level sample limit
+    tasks:
+      - name: inspect_evals/humaneval
+        args:
+          - -T
+          - sandbox=modal
+          - --max-tokens
+          - "2048"
+      - name: mbpp_modal
+        args:
+          - -T
+          - sandbox=modal
+          - --max-tokens
+          - "2048"
+    args:
+      - --model
+      - "{{target_model}}"
+      - --temperature
+      - "0"
+  final_openthoughts_tblite:
+    description: Final benchmark inspect_harbor OpenThoughts-TBLite; modal sandbox and no suite-level sample limit
+    tasks:
+      - name: inspect_harbor/openthoughts_tblite
+        args:
+          - -T
+          - sandbox_env_name=modal
+    args:
+      - --model
+      - "{{target_model}}"
+      - --no-fail-on-error
+      - --continue-on-fail
+      - --message-limit
+      - "100"
+      - --temperature
+      - "0"
   bfcl_only:
     description: BFCL-only rerun suite using the upstream inspect_evals task
     tasks:
@@ -237,7 +367,10 @@ sets:
   openthoughts_tblite:
     description: inspect_harbor OpenThoughts-TBLite suite (requires inspect-harbor; sample failures are logged without aborting the full eval)
     tasks:
-      - inspect_harbor/openthoughts_tblite
+      - name: inspect_harbor/openthoughts_tblite
+        args:
+          - -T
+          - sandbox_env_name=modal
     args:
       - --model
       - "{{target_model}}"

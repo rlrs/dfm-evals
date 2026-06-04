@@ -417,6 +417,27 @@ def test_parse_model_info_normalizes_local_vllm_paths() -> None:
     }
 
 
+def test_apply_model_id_override_sets_canonical_name_and_provider() -> None:
+    modules = _modules()
+    parsed = modules["eee_export_module"]._parse_model_info(
+        "vllm//pfs/lustrep4/scratch/project_465002183/rasmus/post/outputs/prime-rl/apertus-run/final"
+    )
+
+    model_info = modules["eee_export_module"]._apply_model_id_override(
+        parsed,
+        "swiss-ai/apertus-run-final",
+    )
+
+    assert model_info == {
+        "name": "swiss-ai/apertus-run-final",
+        "id": "swiss-ai/apertus-run-final",
+        "developer": "swiss-ai",
+        "inference_engine": {
+            "name": "vllm",
+        },
+    }
+
+
 def test_export_euroeval_results_does_not_use_engine_name_as_developer(tmp_path: Path) -> None:
     modules = _modules()
     results_file = tmp_path / "euroeval-vllm.jsonl"

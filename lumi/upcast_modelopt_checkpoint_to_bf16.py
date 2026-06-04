@@ -364,6 +364,19 @@ def build_output_index(
     }
 
 
+def single_safetensors_name(source_dir: Path) -> str | None:
+    candidates = sorted(
+        entry.name
+        for entry in source_dir.iterdir()
+        if entry.name.endswith(".safetensors") and entry.is_file()
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    if "consolidated.safetensors" in candidates:
+        return "consolidated.safetensors"
+    return None
+
+
 def main() -> None:
     args = parse_args()
     source_dir = Path(args.source).resolve()
@@ -377,14 +390,21 @@ def main() -> None:
         source_dir / "model.safetensors.index.json",
     ]
     index_path = next((candidate for candidate in index_candidates if candidate.exists()), None)
-    if index_path is None:
-        raise SystemExit(f"no safetensors index found in {source_dir}")
 
     ensure_output_dir(output_dir, overwrite=args.overwrite)
     copy_support_files(source_dir, output_dir)
 
-    index_data = load_index(index_path)
-    shard_names = select_shards(index_data, args.only_shards)
+    if index_path is None:
+        shard_name = single_safetensors_name(source_dir)
+        if shard_name is None:
+            raise SystemExit(f"no safetensors index or single safetensors file found in {source_dir}")
+        if args.only_shards and shard_name not in set(args.only_shards):
+            raise SystemExit(f"unknown shard requested for single-file checkpoint: {args.only_shards}")
+        index_data = None
+        shard_names = [shard_name]
+    else:
+        index_data = load_index(index_path)
+        shard_names = select_shards(index_data, args.only_shards)
     conversion_manifest: list[dict[str, int | str]] = []
 
     for shard_name in shard_names:
@@ -416,14 +436,15 @@ def main() -> None:
             f" bytes={stats.bytes_written}"
         )
 
-    output_index = build_output_index(source_dir, output_dir, index_data, shard_names)
-    write_json(output_dir / index_path.name, output_index)
+    if index_data is not None and index_path is not None:
+        output_index = build_output_index(source_dir, output_dir, index_data, shard_names)
+        write_json(output_dir / index_path.name, output_index)
     write_json(
         output_dir / "upcast_manifest.json",
         {
             "source": str(source_dir),
             "output": str(output_dir),
-            "source_index": index_path.name,
+            "source_index": index_path.name if index_path is not None else None,
             "converted_shards": shard_names,
             "manifest": conversion_manifest,
         },

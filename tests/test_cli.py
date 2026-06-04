@@ -15,6 +15,10 @@ def test_packaged_suites_include_openthoughts_tblite() -> None:
     suite = suites["openthoughts_tblite"]
 
     assert [task.name for task in suite.tasks] == ["inspect_harbor/openthoughts_tblite"]
+    assert suite.tasks[0].args == [
+        "-T",
+        "sandbox_env_name=modal",
+    ]
     assert suite.args == [
         "--model",
         "{{target_model}}",
@@ -254,6 +258,15 @@ def test_patch_inspect_sandboxes_modal_context_dir_ignores_missing_modal_depende
     cli._patch_inspect_sandboxes_modal_context_dir()
 
     assert calls == ["inspect_sandboxes.modal._compose"]
+
+
+def test_load_modal_sandbox_overrides_rejects_invalid_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(cli.MODAL_SANDBOX_TIMEOUT_ENV, "0")
+
+    with pytest.raises(ValueError, match=cli.MODAL_SANDBOX_TIMEOUT_ENV):
+        cli._load_modal_sandbox_overrides()
 
 
 def test_load_model_info_overrides_parses_context_lengths(

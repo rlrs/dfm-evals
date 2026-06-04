@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/artifact_root.sh"
+source "$SCRIPT_DIR/laif_runtime.sh"
 POST_ARTIFACT_ROOT="$(resolve_post_artifact_root "$REPO_ROOT")"
 export POST_ARTIFACT_ROOT
 DEFAULT_SUBMIT_SCRIPT="$SCRIPT_DIR/run_suite.sbatch"
@@ -19,10 +20,8 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 SUBMIT_SCRIPT=${SUBMIT_SCRIPT:-$DEFAULT_SUBMIT_SCRIPT}
-OVERLAY_DIR=${OVERLAY_DIR:-$REPO_ROOT/overlay_vllm_minimal}
-if [[ ! -d "$OVERLAY_DIR" && -d "$REPO_ROOT/../overlay_vllm_minimal" ]]; then
-  OVERLAY_DIR="$REPO_ROOT/../overlay_vllm_minimal"
-fi
+BASE_DIR=/pfs/lustref1/appl/local/laifs
+OVERLAY_DIR=${OVERLAY_DIR:-$(dfm_lumi_default_overlay_dir)}
 DFM_EVALS_RUN_ROOT=${DFM_EVALS_RUN_ROOT:-$POST_ARTIFACT_ROOT/evals/runs}
 DFM_EVALS_LOG_ROOT=${DFM_EVALS_LOG_ROOT:-$POST_ARTIFACT_ROOT/evals/logs}
 
@@ -44,8 +43,12 @@ TARGET_VISIBLE_DEVICES=${TARGET_VISIBLE_DEVICES:-}
 MAX_CONNECTIONS=${MAX_CONNECTIONS:-128}
 TARGET_ENABLE_AUTO_TOOL_CHOICE=${TARGET_ENABLE_AUTO_TOOL_CHOICE:-1}
 TARGET_TOOL_CALL_PARSER=${TARGET_TOOL_CALL_PARSER:-hermes}
+TARGET_TOOL_PARSER_PLUGIN=${TARGET_TOOL_PARSER_PLUGIN:-}
+TARGET_REASONING_PARSER=${TARGET_REASONING_PARSER:-}
+TARGET_TOKENIZER_MODE=${TARGET_TOKENIZER_MODE:-}
 TARGET_CHAT_TEMPLATE_KWARGS_JSON=${TARGET_CHAT_TEMPLATE_KWARGS_JSON:-}
 TARGET_ENFORCE_EAGER=${TARGET_ENFORCE_EAGER:-0}
+TARGET_ATTENTION_BACKEND=${TARGET_ATTENTION_BACKEND:-}
 JUDGE_SERVER_ENABLED=${JUDGE_SERVER_ENABLED:-0}
 JUDGE_SERVER_MODEL=${JUDGE_SERVER_MODEL:-}
 JUDGE_SERVER_SERVED_MODEL_NAME=${JUDGE_SERVER_SERVED_MODEL_NAME:-}
@@ -58,14 +61,24 @@ JUDGE_GPU_MEM=${JUDGE_GPU_MEM:-0.85}
 JUDGE_VISIBLE_DEVICES=${JUDGE_VISIBLE_DEVICES:-}
 JUDGE_ENABLE_AUTO_TOOL_CHOICE=${JUDGE_ENABLE_AUTO_TOOL_CHOICE:-0}
 JUDGE_TOOL_CALL_PARSER=${JUDGE_TOOL_CALL_PARSER:-}
+JUDGE_REASONING_PARSER=${JUDGE_REASONING_PARSER:-}
+JUDGE_TOKENIZER_MODE=${JUDGE_TOKENIZER_MODE:-}
 JUDGE_CHAT_TEMPLATE_KWARGS_JSON=${JUDGE_CHAT_TEMPLATE_KWARGS_JSON:-}
 JUDGE_ENFORCE_EAGER=${JUDGE_ENFORCE_EAGER:-0}
+JUDGE_ATTENTION_BACKEND=${JUDGE_ATTENTION_BACKEND:-}
 JUDGE_CTX_SET=0
 DFM_EVALS_MODAL_ENABLE_OUTPUT=${DFM_EVALS_MODAL_ENABLE_OUTPUT:-0}
+DFM_EVALS_MODAL_SANDBOX_TIMEOUT=${DFM_EVALS_MODAL_SANDBOX_TIMEOUT:-}
+DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT=${DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT:-}
+DFM_EVALS_RUNNER_IDLE_TIMEOUT=${DFM_EVALS_RUNNER_IDLE_TIMEOUT:-900}
+DFM_EVALS_RUNNER_POLL_INTERVAL=${DFM_EVALS_RUNNER_POLL_INTERVAL:-30}
+DFM_EVALS_RUNNER_KILL_GRACE=${DFM_EVALS_RUNNER_KILL_GRACE:-30}
+DFM_EVALS_SALVAGE_PARTIAL_RESULTS=${DFM_EVALS_SALVAGE_PARTIAL_RESULTS:-1}
 RUN_LABEL=${RUN_LABEL:-}
 EXTRA_ARGS=${EXTRA_ARGS:-}
 DFM_EVALS_EEE_OUTPUT_DIR=${DFM_EVALS_EEE_OUTPUT_DIR:-$POST_ARTIFACT_ROOT/evals/eee/data}
 SLURM_LOG_DIR=${SLURM_LOG_DIR:-$POST_ARTIFACT_ROOT/evals/slurm}
+SBATCH_TIME=${SBATCH_TIME:-}
 DRY_RUN=0
 
 usage() {
@@ -103,17 +116,30 @@ Options:
   --target-enable-auto-tool-choice   Enable target vLLM --enable-auto-tool-choice (default)
   --target-disable-auto-tool-choice  Disable target vLLM --enable-auto-tool-choice
   --target-tool-call-parser <name>   Target vLLM --tool-call-parser (default: hermes; use 'none' to unset)
+  --target-reasoning-parser <name>   Target vLLM --reasoning-parser (default: unset; use 'none' to unset)
+  --target-tokenizer-mode <name>     Target vLLM --tokenizer-mode (default: auto; e.g. mistral)
   --target-chat-template-kwargs-json <json>  Target vLLM --default-chat-template-kwargs JSON
   --target-enforce-eager             Enable target vLLM --enforce-eager
   --target-disable-enforce-eager     Disable target vLLM --enforce-eager (default)
+  --target-attention-backend <name>  Target vLLM --attention-backend (e.g. FLASH_ATTN)
   --judge-enable-auto-tool-choice    Enable judge vLLM --enable-auto-tool-choice
   --judge-disable-auto-tool-choice   Disable judge vLLM --enable-auto-tool-choice (default)
   --judge-tool-call-parser <name>    Judge vLLM --tool-call-parser (default: unset; use 'none' to unset)
+  --judge-reasoning-parser <name>    Judge vLLM --reasoning-parser (default: unset; use 'none' to unset)
+  --judge-tokenizer-mode <name>      Judge vLLM --tokenizer-mode (default: auto; e.g. mistral)
   --judge-chat-template-kwargs-json <json>   Judge vLLM --default-chat-template-kwargs JSON
   --judge-enforce-eager              Enable judge vLLM --enforce-eager
   --judge-disable-enforce-eager      Disable judge vLLM --enforce-eager (default)
+  --judge-attention-backend <name>   Judge vLLM --attention-backend
   --modal-enable-output      Wrap eval execution in `modal.enable_output()` for Modal logs
   --modal-disable-output     Disable Modal SDK output (default)
+  --modal-sandbox-timeout <seconds>       Override Modal sandbox max lifetime
+  --modal-sandbox-idle-timeout <seconds>  Override Modal sandbox idle timeout
+  --runner-idle-timeout <seconds>         Kill eval subprocess if no progress is observed for this long
+  --runner-poll-interval <seconds>        Progress watchdog poll interval (default: 30)
+  --runner-kill-grace <seconds>           Grace period before SIGKILL after watchdog triggers
+  --runner-enable-salvage                 Write partial-results sidecars for incomplete .eval files (default)
+  --runner-disable-salvage                Disable partial-results sidecar salvage
   --run-label <label>        Optional DFM_EVALS_RUN_LABEL override (default: <suite>__<model-slug>__job-<jobid>)
   --extra-args <string>      Extra args appended to evals CLI
   --eee-output-dir <path>    EEE root data dir override (default: $POST_ARTIFACT_ROOT/evals/eee/data)
@@ -335,6 +361,16 @@ while [[ $# -gt 0 ]]; do
       TARGET_TOOL_CALL_PARSER="$2"
       shift 2
       ;;
+    --target-reasoning-parser)
+      need_value "$1" "$#"
+      TARGET_REASONING_PARSER="$2"
+      shift 2
+      ;;
+    --target-tokenizer-mode)
+      need_value "$1" "$#"
+      TARGET_TOKENIZER_MODE="$2"
+      shift 2
+      ;;
     --target-chat-template-kwargs-json)
       need_value "$1" "$#"
       TARGET_CHAT_TEMPLATE_KWARGS_JSON="$2"
@@ -348,6 +384,11 @@ while [[ $# -gt 0 ]]; do
       TARGET_ENFORCE_EAGER=0
       shift
       ;;
+    --target-attention-backend)
+      need_value "$1" "$#"
+      TARGET_ATTENTION_BACKEND="$2"
+      shift 2
+      ;;
     --judge-enable-auto-tool-choice)
       JUDGE_ENABLE_AUTO_TOOL_CHOICE=1
       shift
@@ -359,6 +400,16 @@ while [[ $# -gt 0 ]]; do
     --judge-tool-call-parser)
       need_value "$1" "$#"
       JUDGE_TOOL_CALL_PARSER="$2"
+      shift 2
+      ;;
+    --judge-reasoning-parser)
+      need_value "$1" "$#"
+      JUDGE_REASONING_PARSER="$2"
+      shift 2
+      ;;
+    --judge-tokenizer-mode)
+      need_value "$1" "$#"
+      JUDGE_TOKENIZER_MODE="$2"
       shift 2
       ;;
     --judge-chat-template-kwargs-json)
@@ -374,12 +425,50 @@ while [[ $# -gt 0 ]]; do
       JUDGE_ENFORCE_EAGER=0
       shift
       ;;
+    --judge-attention-backend)
+      need_value "$1" "$#"
+      JUDGE_ATTENTION_BACKEND="$2"
+      shift 2
+      ;;
     --modal-enable-output)
       DFM_EVALS_MODAL_ENABLE_OUTPUT=1
       shift
       ;;
     --modal-disable-output)
       DFM_EVALS_MODAL_ENABLE_OUTPUT=0
+      shift
+      ;;
+    --modal-sandbox-timeout)
+      need_value "$1" "$#"
+      DFM_EVALS_MODAL_SANDBOX_TIMEOUT="$2"
+      shift 2
+      ;;
+    --modal-sandbox-idle-timeout)
+      need_value "$1" "$#"
+      DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT="$2"
+      shift 2
+      ;;
+    --runner-idle-timeout)
+      need_value "$1" "$#"
+      DFM_EVALS_RUNNER_IDLE_TIMEOUT="$2"
+      shift 2
+      ;;
+    --runner-poll-interval)
+      need_value "$1" "$#"
+      DFM_EVALS_RUNNER_POLL_INTERVAL="$2"
+      shift 2
+      ;;
+    --runner-kill-grace)
+      need_value "$1" "$#"
+      DFM_EVALS_RUNNER_KILL_GRACE="$2"
+      shift 2
+      ;;
+    --runner-enable-salvage)
+      DFM_EVALS_SALVAGE_PARTIAL_RESULTS=1
+      shift
+      ;;
+    --runner-disable-salvage)
+      DFM_EVALS_SALVAGE_PARTIAL_RESULTS=0
       shift
       ;;
     --run-label)
@@ -469,8 +558,20 @@ fi
 if [[ "$TARGET_TOOL_CALL_PARSER" == "none" ]]; then
   TARGET_TOOL_CALL_PARSER=""
 fi
+if [[ "$TARGET_REASONING_PARSER" == "none" ]]; then
+  TARGET_REASONING_PARSER=""
+fi
+if [[ "$TARGET_TOKENIZER_MODE" == "none" ]]; then
+  TARGET_TOKENIZER_MODE=""
+fi
 if [[ "$JUDGE_TOOL_CALL_PARSER" == "none" ]]; then
   JUDGE_TOOL_CALL_PARSER=""
+fi
+if [[ "$JUDGE_REASONING_PARSER" == "none" ]]; then
+  JUDGE_REASONING_PARSER=""
+fi
+if [[ "$JUDGE_TOKENIZER_MODE" == "none" ]]; then
+  JUDGE_TOKENIZER_MODE=""
 fi
 case "$TARGET_ENABLE_AUTO_TOOL_CHOICE" in
   0|1) ;;
@@ -527,6 +628,12 @@ env_kv=(
   "DFM_EVALS_SUITE=$SUITE"
   "DFM_EVALS_LIMIT=$LIMIT"
   "DFM_EVALS_MODAL_ENABLE_OUTPUT=$DFM_EVALS_MODAL_ENABLE_OUTPUT"
+  "DFM_EVALS_MODAL_SANDBOX_TIMEOUT=$DFM_EVALS_MODAL_SANDBOX_TIMEOUT"
+  "DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT=$DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT"
+  "DFM_EVALS_RUNNER_IDLE_TIMEOUT=$DFM_EVALS_RUNNER_IDLE_TIMEOUT"
+  "DFM_EVALS_RUNNER_POLL_INTERVAL=$DFM_EVALS_RUNNER_POLL_INTERVAL"
+  "DFM_EVALS_RUNNER_KILL_GRACE=$DFM_EVALS_RUNNER_KILL_GRACE"
+  "DFM_EVALS_SALVAGE_PARTIAL_RESULTS=$DFM_EVALS_SALVAGE_PARTIAL_RESULTS"
   "TP=$TP"
   "PP=$PP"
   "DP=$DP"
@@ -536,8 +643,12 @@ env_kv=(
   "MAX_CONNECTIONS=$MAX_CONNECTIONS"
   "TARGET_ENABLE_AUTO_TOOL_CHOICE=$TARGET_ENABLE_AUTO_TOOL_CHOICE"
   "TARGET_TOOL_CALL_PARSER=$TARGET_TOOL_CALL_PARSER"
+  "TARGET_TOOL_PARSER_PLUGIN=$TARGET_TOOL_PARSER_PLUGIN"
+  "TARGET_REASONING_PARSER=$TARGET_REASONING_PARSER"
+  "TARGET_TOKENIZER_MODE=$TARGET_TOKENIZER_MODE"
   "TARGET_CHAT_TEMPLATE_KWARGS_JSON=$TARGET_CHAT_TEMPLATE_KWARGS_JSON"
   "TARGET_ENFORCE_EAGER=$TARGET_ENFORCE_EAGER"
+  "TARGET_ATTENTION_BACKEND=$TARGET_ATTENTION_BACKEND"
   "JUDGE_SERVER_ENABLED=$JUDGE_SERVER_ENABLED"
   "JUDGE_SERVER_MODEL=$JUDGE_SERVER_MODEL"
   "JUDGE_PORT=$JUDGE_PORT"
@@ -548,8 +659,11 @@ env_kv=(
   "JUDGE_GPU_MEM=$JUDGE_GPU_MEM"
   "JUDGE_ENABLE_AUTO_TOOL_CHOICE=$JUDGE_ENABLE_AUTO_TOOL_CHOICE"
   "JUDGE_TOOL_CALL_PARSER=$JUDGE_TOOL_CALL_PARSER"
+  "JUDGE_REASONING_PARSER=$JUDGE_REASONING_PARSER"
+  "JUDGE_TOKENIZER_MODE=$JUDGE_TOKENIZER_MODE"
   "JUDGE_CHAT_TEMPLATE_KWARGS_JSON=$JUDGE_CHAT_TEMPLATE_KWARGS_JSON"
   "JUDGE_ENFORCE_EAGER=$JUDGE_ENFORCE_EAGER"
+  "JUDGE_ATTENTION_BACKEND=$JUDGE_ATTENTION_BACKEND"
 )
 if [[ -n "${SERVER_START_TIMEOUT:-}" ]]; then
   env_kv+=("SERVER_START_TIMEOUT=$SERVER_START_TIMEOUT")
@@ -568,6 +682,9 @@ if [[ -n "$EXTRA_ARGS" ]]; then
 fi
 if [[ -n "$DFM_EVALS_EEE_OUTPUT_DIR" ]]; then
   env_kv+=("DFM_EVALS_EEE_OUTPUT_DIR=$DFM_EVALS_EEE_OUTPUT_DIR")
+fi
+if [[ -n "${DFM_EVALS_EEE_MODEL_ID:-}" ]]; then
+  env_kv+=("DFM_EVALS_EEE_MODEL_ID=$DFM_EVALS_EEE_MODEL_ID")
 fi
 if [[ -n "$TARGET_VISIBLE_DEVICES" ]]; then
   env_kv+=("TARGET_VISIBLE_DEVICES=$TARGET_VISIBLE_DEVICES")
@@ -603,8 +720,12 @@ echo "Target devices: ${TARGET_VISIBLE_DEVICES:-<all>}"
 echo "Max connections: $MAX_CONNECTIONS"
 echo "Target auto tool choice: $TARGET_ENABLE_AUTO_TOOL_CHOICE"
 echo "Target tool call parser: ${TARGET_TOOL_CALL_PARSER:-<none>}"
+echo "Target tool parser plugin: ${TARGET_TOOL_PARSER_PLUGIN:-<none>}"
+echo "Target reasoning parser: ${TARGET_REASONING_PARSER:-<none>}"
+echo "Target tokenizer mode: ${TARGET_TOKENIZER_MODE:-<auto>}"
 echo "Target chat template kwargs: ${TARGET_CHAT_TEMPLATE_KWARGS_JSON:-<none>}"
 echo "Target enforce eager: $TARGET_ENFORCE_EAGER"
+echo "Target attention backend: ${TARGET_ATTENTION_BACKEND:-<auto>}"
 echo "Judge server enabled: $JUDGE_SERVER_ENABLED"
 echo "Judge server model: $JUDGE_SERVER_MODEL"
 echo "Judge port: $JUDGE_PORT"
@@ -614,9 +735,18 @@ echo "Judge GPU_MEM: $JUDGE_GPU_MEM"
 echo "Judge devices: ${JUDGE_VISIBLE_DEVICES:-<all>}"
 echo "Judge auto tool choice: $JUDGE_ENABLE_AUTO_TOOL_CHOICE"
 echo "Judge tool call parser: ${JUDGE_TOOL_CALL_PARSER:-<none>}"
+echo "Judge reasoning parser: ${JUDGE_REASONING_PARSER:-<none>}"
+echo "Judge tokenizer mode: ${JUDGE_TOKENIZER_MODE:-<auto>}"
 echo "Judge chat template kwargs: ${JUDGE_CHAT_TEMPLATE_KWARGS_JSON:-<none>}"
 echo "Judge enforce eager: $JUDGE_ENFORCE_EAGER"
+echo "Judge attention backend: ${JUDGE_ATTENTION_BACKEND:-<auto>}"
 echo "Modal enable output: $DFM_EVALS_MODAL_ENABLE_OUTPUT"
+echo "Modal sandbox timeout: ${DFM_EVALS_MODAL_SANDBOX_TIMEOUT:-<default>}"
+echo "Modal sandbox idle timeout: ${DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT:-<default>}"
+echo "Runner idle timeout: ${DFM_EVALS_RUNNER_IDLE_TIMEOUT:-<disabled>}"
+echo "Runner poll interval: ${DFM_EVALS_RUNNER_POLL_INTERVAL}s"
+echo "Runner kill grace: ${DFM_EVALS_RUNNER_KILL_GRACE}s"
+echo "Runner salvage partial results: $DFM_EVALS_SALVAGE_PARTIAL_RESULTS"
 if [[ -n "$JUDGE_SERVER_SERVED_MODEL_NAME" ]]; then
   echo "Judge served name override: $JUDGE_SERVER_SERVED_MODEL_NAME"
 fi
@@ -635,6 +765,9 @@ fi
 if [[ -n "$DFM_EVALS_EEE_OUTPUT_DIR" ]]; then
   echo "EEE output dir override: $DFM_EVALS_EEE_OUTPUT_DIR"
 fi
+if [[ -n "${DFM_EVALS_EEE_MODEL_ID:-}" ]]; then
+  echo "EEE model id override: $DFM_EVALS_EEE_MODEL_ID"
+fi
 if [[ -n "$OPENAI_BASE_URL_OVERRIDE" ]]; then
   echo "OpenAI base URL override: $OPENAI_BASE_URL_OVERRIDE"
 fi
@@ -644,10 +777,16 @@ fi
 if [[ -n "${SBATCH_BEGIN:-}" ]]; then
   echo "Slurm begin override: $SBATCH_BEGIN"
 fi
+if [[ -n "$SBATCH_TIME" ]]; then
+  echo "Slurm time override: $SBATCH_TIME"
+fi
 
 cmd=(env "${env_kv[@]}" sbatch)
 if [[ -n "${SBATCH_BEGIN:-}" ]]; then
   cmd+=(--begin "$SBATCH_BEGIN")
+fi
+if [[ -n "$SBATCH_TIME" ]]; then
+  cmd+=(--time "$SBATCH_TIME")
 fi
 cmd+=(--output "$slurm_out_path" --error "$slurm_err_path" "$SUBMIT_SCRIPT")
 if [[ "$DRY_RUN" == "1" ]]; then

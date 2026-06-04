@@ -5,6 +5,7 @@ import pytest
 from dfm_evals.tasks.ruler.generators import generate_samples
 from dfm_evals.tasks.ruler.presets import PRESETS, get_preset
 from dfm_evals.tasks.ruler.qa_data import QABundle, QADocument, QAExample
+from dfm_evals.tasks.ruler import qa_data
 from dfm_evals.tasks.ruler.task import (
     _string_match_all,
     _string_match_any,
@@ -166,6 +167,39 @@ def test_generate_qa_uses_cached_bundle(
     assert sample.metadata["family"] == "qa"
     assert sample.metadata["match_mode"] == "any"
     assert "Question:" in sample.input
+
+
+def test_ruler_qa_cache_defaults_to_artifact_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.delenv("DFM_EVALS_RULER_QA_CACHE", raising=False)
+    monkeypatch.setenv("POST_ARTIFACT_ROOT", str(tmp_path))
+
+    assert qa_data._cache_dir() == tmp_path / "evals" / "ruler_qa_cache"
+
+
+def test_ruler_qa_cache_env_override_wins(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    override = tmp_path / "qa-cache"
+    monkeypatch.setenv("DFM_EVALS_RULER_QA_CACHE", str(override))
+    monkeypatch.setenv("POST_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+
+    assert qa_data._cache_dir() == override
+
+
+def test_ruler_qa_offline_missing_cache_fails_before_download(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("DFM_EVALS_RULER_QA_CACHE", str(tmp_path))
+    monkeypatch.setenv("DFM_EVALS_RULER_QA_OFFLINE", "1")
+    qa_data.load_qa_bundle.cache_clear()
+
+    with pytest.raises(FileNotFoundError, match="is not cached"):
+        qa_data.load_qa_bundle("squad")
 
 
 def test_string_match_helpers_behave_like_ruler_reference_metrics() -> None:
