@@ -25,6 +25,12 @@ source "$SCRIPT_DIR/artifact_root.sh"
 POST_ARTIFACT_ROOT="$(resolve_post_artifact_root "$REPO_ROOT")"
 export POST_ARTIFACT_ROOT
 
+if [[ -f "$REPO_ROOT/.env" ]]; then
+  set -a
+  source "$REPO_ROOT/.env"
+  set +a
+fi
+
 BASE_DIR=/pfs/lustref1/appl/local/laifs
 LAIFS_APPL_DIR=/appl/local/laifs
 SIF=${SIF:-$(dfm_lumi_default_sif)}
@@ -34,9 +40,16 @@ SINGULARITY_GPU_MODE=${SINGULARITY_GPU_MODE:-$(dfm_lumi_default_gpu_mode "$SIF")
 MODEL=${MODEL:-google/gemma-3-4b-it}
 DFM_EVALS_MODEL=${DFM_EVALS_MODEL:-vllm/$MODEL}
 DFM_EVALS_TARGET_MODEL=${DFM_EVALS_TARGET_MODEL:-$DFM_EVALS_MODEL}
-DFM_EVALS_JUDGE_MODEL=${DFM_EVALS_JUDGE_MODEL:-$DFM_EVALS_TARGET_MODEL}
+JUDGE_MODEL=${JUDGE_MODEL:-}
+DFM_EVALS_JUDGE_MODEL=${DFM_EVALS_JUDGE_MODEL:-${JUDGE_MODEL:-$DFM_EVALS_TARGET_MODEL}}
 DFM_EVALS_OPENAI_BASE_URL=${DFM_EVALS_OPENAI_BASE_URL:-${OPENAI_BASE_URL:-}}
-JUDGE_MODEL_AUTO=${JUDGE_MODEL_AUTO:-0}
+if [[ -z "${JUDGE_MODEL_AUTO:-}" ]]; then
+  if [[ -n "$JUDGE_MODEL" || -n "${DFM_EVALS_JUDGE_MODEL:-}" ]]; then
+    JUDGE_MODEL_AUTO=0
+  else
+    JUDGE_MODEL_AUTO=1
+  fi
+fi
 DFM_EVALS_SUITE=${DFM_EVALS_SUITE:-fundamentals}
 DFM_EVALS_SUITES_FILE=${DFM_EVALS_SUITES_FILE:-}
 DFM_EVALS_LIMIT=${DFM_EVALS_LIMIT-20}
@@ -46,12 +59,19 @@ case "${DFM_EVALS_LIMIT}" in
     ;;
 esac
 DFM_EVALS_MODAL_ENABLE_OUTPUT=${DFM_EVALS_MODAL_ENABLE_OUTPUT:-0}
+DFM_EVALS_MODAL_SANDBOX_TIMEOUT=${DFM_EVALS_MODAL_SANDBOX_TIMEOUT:-}
+DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT=${DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT:-}
+DFM_EVALS_RUNNER_IDLE_TIMEOUT=${DFM_EVALS_RUNNER_IDLE_TIMEOUT:-900}
+DFM_EVALS_RUNNER_POLL_INTERVAL=${DFM_EVALS_RUNNER_POLL_INTERVAL:-30}
+DFM_EVALS_RUNNER_KILL_GRACE=${DFM_EVALS_RUNNER_KILL_GRACE:-30}
+DFM_EVALS_SALVAGE_PARTIAL_RESULTS=${DFM_EVALS_SALVAGE_PARTIAL_RESULTS:-1}
 DFM_EVALS_TEMPERATURE=${DFM_EVALS_TEMPERATURE:-0}
 DFM_EVALS_EXTRA_ARGS=${DFM_EVALS_EXTRA_ARGS:-}
 DFM_EVALS_EXPORT_EEE=${DFM_EVALS_EXPORT_EEE:-1}
 DFM_EVALS_EEE_OUTPUT_DIR=${DFM_EVALS_EEE_OUTPUT_DIR:-$POST_ARTIFACT_ROOT/evals/eee/data}
 DFM_EVALS_EEE_SOURCE_ORGANIZATION_NAME=${DFM_EVALS_EEE_SOURCE_ORGANIZATION_NAME:-dfm-evals}
 DFM_EVALS_EEE_EVALUATOR_RELATIONSHIP=${DFM_EVALS_EEE_EVALUATOR_RELATIONSHIP:-third_party}
+DFM_EVALS_EEE_MODEL_ID=${DFM_EVALS_EEE_MODEL_ID:-}
 
 TP=${TP:-8}
 PP=${PP:-1}
@@ -63,8 +83,12 @@ TARGET_PORT=${TARGET_PORT:-8000}
 TARGET_VISIBLE_DEVICES=${TARGET_VISIBLE_DEVICES:-}
 TARGET_ENABLE_AUTO_TOOL_CHOICE=${TARGET_ENABLE_AUTO_TOOL_CHOICE:-1}
 TARGET_TOOL_CALL_PARSER=${TARGET_TOOL_CALL_PARSER:-hermes}
+TARGET_TOOL_PARSER_PLUGIN=${TARGET_TOOL_PARSER_PLUGIN:-}
+TARGET_REASONING_PARSER=${TARGET_REASONING_PARSER:-}
+TARGET_TOKENIZER_MODE=${TARGET_TOKENIZER_MODE:-}
 TARGET_CHAT_TEMPLATE_KWARGS_JSON=${TARGET_CHAT_TEMPLATE_KWARGS_JSON:-}
 TARGET_ENFORCE_EAGER=${TARGET_ENFORCE_EAGER:-0}
+TARGET_ATTENTION_BACKEND=${TARGET_ATTENTION_BACKEND:-}
 
 JUDGE_SERVER_ENABLED=${JUDGE_SERVER_ENABLED:-0}
 JUDGE_SERVER_MODEL=${JUDGE_SERVER_MODEL:-$MODEL}
@@ -78,8 +102,12 @@ JUDGE_GPU_MEM=${JUDGE_GPU_MEM:-0.85}
 JUDGE_VISIBLE_DEVICES=${JUDGE_VISIBLE_DEVICES:-}
 JUDGE_ENABLE_AUTO_TOOL_CHOICE=${JUDGE_ENABLE_AUTO_TOOL_CHOICE:-0}
 JUDGE_TOOL_CALL_PARSER=${JUDGE_TOOL_CALL_PARSER:-}
+JUDGE_TOOL_PARSER_PLUGIN=${JUDGE_TOOL_PARSER_PLUGIN:-}
+JUDGE_REASONING_PARSER=${JUDGE_REASONING_PARSER:-}
+JUDGE_TOKENIZER_MODE=${JUDGE_TOKENIZER_MODE:-}
 JUDGE_CHAT_TEMPLATE_KWARGS_JSON=${JUDGE_CHAT_TEMPLATE_KWARGS_JSON:-}
 JUDGE_ENFORCE_EAGER=${JUDGE_ENFORCE_EAGER:-0}
+JUDGE_ATTENTION_BACKEND=${JUDGE_ATTENTION_BACKEND:-}
 
 case "${CTX}" in
   ""|auto|none)
@@ -112,6 +140,9 @@ TARGET_SERVER_LOG=""
 JUDGE_VLLM_URL=""
 JUDGE_SERVER_PID=""
 JUDGE_SERVER_LOG=""
+EVAL_RUN_PID=""
+EVAL_RUN_EXIT_CODE=0
+EVAL_RUN_STALLED=0
 
 ORIG_DFM_EVALS_MODEL="$DFM_EVALS_MODEL"
 ORIG_DFM_EVALS_TARGET_MODEL="$DFM_EVALS_TARGET_MODEL"
@@ -152,8 +183,32 @@ die() {
 if [[ "$TARGET_TOOL_CALL_PARSER" == "none" ]]; then
   TARGET_TOOL_CALL_PARSER=""
 fi
+if [[ "$TARGET_REASONING_PARSER" == "none" ]]; then
+  TARGET_REASONING_PARSER=""
+fi
+if [[ "$TARGET_TOOL_PARSER_PLUGIN" == "none" ]]; then
+  TARGET_TOOL_PARSER_PLUGIN=""
+fi
+if [[ "$TARGET_TOKENIZER_MODE" == "none" ]]; then
+  TARGET_TOKENIZER_MODE=""
+fi
 if [[ "$JUDGE_TOOL_CALL_PARSER" == "none" ]]; then
   JUDGE_TOOL_CALL_PARSER=""
+fi
+if [[ "$JUDGE_REASONING_PARSER" == "none" ]]; then
+  JUDGE_REASONING_PARSER=""
+fi
+if [[ "$JUDGE_TOOL_PARSER_PLUGIN" == "none" ]]; then
+  JUDGE_TOOL_PARSER_PLUGIN=""
+fi
+if [[ "$JUDGE_TOKENIZER_MODE" == "none" ]]; then
+  JUDGE_TOKENIZER_MODE=""
+fi
+if [[ "$TARGET_ATTENTION_BACKEND" == "none" ]]; then
+  TARGET_ATTENTION_BACKEND=""
+fi
+if [[ "$JUDGE_ATTENTION_BACKEND" == "none" ]]; then
+  JUDGE_ATTENTION_BACKEND=""
 fi
 
 case "$TARGET_ENABLE_AUTO_TOOL_CHOICE" in
@@ -432,11 +487,20 @@ DFM_EVALS_XDG_CACHE_HOME=${DFM_EVALS_XDG_CACHE_HOME:-${DFM_EVALS_CACHE_DIR}/xdg-
 DFM_EVALS_XDG_DATA_HOME=${DFM_EVALS_XDG_DATA_HOME:-${DFM_EVALS_CACHE_DIR}/xdg-data}
 DFM_EVALS_TRITON_CACHE_DIR=${DFM_EVALS_TRITON_CACHE_DIR:-${DFM_EVALS_CACHE_DIR}/triton}
 DFM_EVALS_TORCHINDUCTOR_CACHE_DIR=${DFM_EVALS_TORCHINDUCTOR_CACHE_DIR:-${DFM_EVALS_CACHE_DIR}/torchinductor}
+DFM_EVALS_RULER_QA_CACHE=${DFM_EVALS_RULER_QA_CACHE:-${POST_ARTIFACT_ROOT}/evals/ruler_qa_cache}
+DFM_EVALS_RULER_QA_OFFLINE=${DFM_EVALS_RULER_QA_OFFLINE:-1}
 TARGET_SERVER_CACHE_ROOT=${TARGET_SERVER_CACHE_ROOT:-${DFM_EVALS_CACHE_DIR}/target-server}
 JUDGE_SERVER_CACHE_ROOT=${JUDGE_SERVER_CACHE_ROOT:-${DFM_EVALS_CACHE_DIR}/judge-server}
 if [[ -z "$DFM_EVALS_EEE_OUTPUT_DIR" ]]; then
   DFM_EVALS_EEE_OUTPUT_DIR="${POST_ARTIFACT_ROOT}/evals/eee/data"
 fi
+
+case "${DFM_EVALS_RULER_QA_OFFLINE,,}" in
+  1|true|yes|on)
+    [[ -s "$DFM_EVALS_RULER_QA_CACHE/squad.json" ]] || die "missing cached RULER QA dataset: $DFM_EVALS_RULER_QA_CACHE/squad.json"
+    [[ -s "$DFM_EVALS_RULER_QA_CACHE/hotpotqa.json" ]] || die "missing cached RULER QA dataset: $DFM_EVALS_RULER_QA_CACHE/hotpotqa.json"
+    ;;
+esac
 
 normalize_tokenizer_dir() {
   local source_dir="$1"
@@ -511,10 +575,10 @@ build_model_info_overrides() {
 import json
 import os
 
-overrides: dict[str, dict[str, int]] = {}
+overrides = {}
 
 
-def maybe_add(model_env: str, ctx_env: str) -> None:
+def maybe_add(model_env, ctx_env):
     model_name = os.environ.get(model_env, "").strip()
     ctx = os.environ.get(ctx_env, "").strip()
     if not model_name or not ctx or not model_name.startswith("vllm/"):
@@ -630,10 +694,14 @@ start_vllm_server() {
   local tokenizer_path="${16}"
   local enable_auto_tool_choice="${17}"
   local tool_call_parser="${18}"
-  local chat_template_kwargs_json="${19}"
-  local enforce_eager="${20}"
-  local log_file="${21}"
-  local cache_root="${22}"
+  local reasoning_parser="${19}"
+  local tokenizer_mode="${20}"
+  local chat_template_kwargs_json="${21}"
+  local enforce_eager="${22}"
+  local attention_backend="${23}"
+  local tool_parser_plugin="${24}"
+  local log_file="${25}"
+  local cache_root="${26}"
 
   local server_cmd
 server_cmd="$(render_env)
@@ -653,14 +721,26 @@ EXTRA_VLLM_FLAGS+=(--enable-prefix-caching)
 if [[ \"\${ENABLE_AUTO_TOOL_CHOICE:-0}\" == \"1\" ]]; then
   EXTRA_VLLM_FLAGS+=(--enable-auto-tool-choice)
 fi
+  if [[ -n \"\${TOOL_PARSER_PLUGIN:-}\" ]]; then
+    EXTRA_VLLM_FLAGS+=(--tool-parser-plugin \"\${TOOL_PARSER_PLUGIN}\")
+  fi
   if [[ -n \"\${TOOL_CALL_PARSER:-}\" ]]; then
     EXTRA_VLLM_FLAGS+=(--tool-call-parser \"\${TOOL_CALL_PARSER}\")
+  fi
+  if [[ -n \"\${REASONING_PARSER:-}\" ]]; then
+    EXTRA_VLLM_FLAGS+=(--reasoning-parser \"\${REASONING_PARSER}\")
+  fi
+  if [[ -n \"\${TOKENIZER_MODE:-}\" ]]; then
+    EXTRA_VLLM_FLAGS+=(--tokenizer-mode \"\${TOKENIZER_MODE}\")
   fi
   if [[ -n \"\${DEFAULT_CHAT_TEMPLATE_KWARGS:-}\" ]]; then
     EXTRA_VLLM_FLAGS+=(--default-chat-template-kwargs \"\${DEFAULT_CHAT_TEMPLATE_KWARGS}\")
   fi
   if [[ \"\${ENFORCE_EAGER:-0}\" == \"1\" ]]; then
     EXTRA_VLLM_FLAGS+=(--enforce-eager)
+  fi
+  if [[ -n \"\${ATTENTION_BACKEND:-}\" ]]; then
+    EXTRA_VLLM_FLAGS+=(--attention-backend \"\${ATTENTION_BACKEND}\")
   fi
   if [[ -n \"\${CTX:-}\" ]]; then
     EXTRA_VLLM_FLAGS+=(--max-model-len \"\${CTX}\")
@@ -706,9 +786,13 @@ python -m dfm_evals.vllm_serve serve \"\${MODEL_TAG}\" \\
       LORA_CHAT_TEMPLATE_PATH="$chat_template" \
       LORA_TOKENIZER_PATH="$tokenizer_path" \
       ENABLE_AUTO_TOOL_CHOICE="$enable_auto_tool_choice" \
-      TOOL_CALL_PARSER="$tool_call_parser" \
-      DEFAULT_CHAT_TEMPLATE_KWARGS="$chat_template_kwargs_json" \
-      ENFORCE_EAGER="$enforce_eager" \
+    TOOL_PARSER_PLUGIN="$tool_parser_plugin" \
+    TOOL_CALL_PARSER="$tool_call_parser" \
+    REASONING_PARSER="$reasoning_parser" \
+    TOKENIZER_MODE="$tokenizer_mode" \
+    DEFAULT_CHAT_TEMPLATE_KWARGS="$chat_template_kwargs_json" \
+    ENFORCE_EAGER="$enforce_eager" \
+    ATTENTION_BACKEND="$attention_backend" \
       CACHE_ROOT="$cache_root" \
       bash -lc "$server_cmd" \
       >"$log_file" 2>&1 &
@@ -751,6 +835,10 @@ python -m dfm_evals.vllm_serve serve \"\${MODEL_TAG}\" \\
 
 cleanup() {
   set +e
+  if [[ -n "$EVAL_RUN_PID" ]] && kill -0 "$EVAL_RUN_PID" >/dev/null 2>&1; then
+    kill "$EVAL_RUN_PID" >/dev/null 2>&1 || true
+    wait "$EVAL_RUN_PID" >/dev/null 2>&1 || true
+  fi
   if [[ -n "$JUDGE_SERVER_PID" ]] && kill -0 "$JUDGE_SERVER_PID" >/dev/null 2>&1; then
     kill "$JUDGE_SERVER_PID" >/dev/null 2>&1 || true
     wait "$JUDGE_SERVER_PID" >/dev/null 2>&1 || true
@@ -761,6 +849,86 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+progress_epoch() {
+  local newest=""
+  {
+    find "$DFM_EVALS_LOG_DIR" -maxdepth 1 -type f \
+      \( -name '*.eval' -o -name '*.json' \) -printf '%T@\n' 2>/dev/null || true
+    find "$DFM_EVALS_XDG_DATA_HOME/inspect_ai/traces" -maxdepth 1 -type f \
+      -printf '%T@\n' 2>/dev/null || true
+    if [[ -f "$TARGET_SERVER_LOG" ]]; then
+      stat -c '%Y' "$TARGET_SERVER_LOG" 2>/dev/null || true
+    fi
+    if [[ -n "$JUDGE_SERVER_LOG" && -f "$JUDGE_SERVER_LOG" ]]; then
+      stat -c '%Y' "$JUDGE_SERVER_LOG" 2>/dev/null || true
+    fi
+  } | sort -nr | head -n1 || true
+}
+
+salvage_partial_results() {
+  if [[ "$DFM_EVALS_SALVAGE_PARTIAL_RESULTS" != "1" ]]; then
+    return 0
+  fi
+
+  local salvage_cmd
+  printf -v salvage_cmd '%q %q' \
+    "$REPO_ROOT/lumi/salvage_eval.py" \
+    "$DFM_EVALS_LOG_DIR"
+
+  singularity exec "${SINGULARITY_GPU_ARGS[@]}" "${SING_BIND_ARGS[@]}" "$SIF" \
+    bash -lc "$(render_env)
+cd $(printf '%q' "$REPO_ROOT")
+python ${salvage_cmd}" || true
+}
+
+run_eval_with_watchdog() {
+  singularity exec "${SINGULARITY_GPU_ARGS[@]}" "${SING_BIND_ARGS[@]}" "$SIF" bash -lc "$RUN_CMD" &
+  EVAL_RUN_PID=$!
+
+  local last_progress_wall
+  local last_progress_epoch
+  local current_progress_epoch
+  local now
+
+  last_progress_wall="$(date +%s)"
+  last_progress_epoch="$(progress_epoch)"
+  if [[ -z "$last_progress_epoch" ]]; then
+    last_progress_epoch=0
+  fi
+
+  while kill -0 "$EVAL_RUN_PID" >/dev/null 2>&1; do
+    sleep "$DFM_EVALS_RUNNER_POLL_INTERVAL"
+    current_progress_epoch="$(progress_epoch)"
+    if [[ -n "$current_progress_epoch" && "$current_progress_epoch" != "$last_progress_epoch" ]]; then
+      last_progress_epoch="$current_progress_epoch"
+      last_progress_wall="$(date +%s)"
+    fi
+
+    if [[ "$DFM_EVALS_RUNNER_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] && (( DFM_EVALS_RUNNER_IDLE_TIMEOUT > 0 )); then
+      now="$(date +%s)"
+      if (( now - last_progress_wall >= DFM_EVALS_RUNNER_IDLE_TIMEOUT )); then
+        echo "WARNING: dfm-evals runner observed no progress for ${DFM_EVALS_RUNNER_IDLE_TIMEOUT}s; terminating eval subprocess pid=$EVAL_RUN_PID" >&2
+        EVAL_RUN_STALLED=1
+        kill "$EVAL_RUN_PID" >/dev/null 2>&1 || true
+        local deadline=$(( now + DFM_EVALS_RUNNER_KILL_GRACE ))
+        while kill -0 "$EVAL_RUN_PID" >/dev/null 2>&1 && (( $(date +%s) < deadline )); do
+          sleep 1
+        done
+        if kill -0 "$EVAL_RUN_PID" >/dev/null 2>&1; then
+          kill -9 "$EVAL_RUN_PID" >/dev/null 2>&1 || true
+        fi
+        break
+      fi
+    fi
+  done
+
+  if wait "$EVAL_RUN_PID"; then
+    EVAL_RUN_EXIT_CODE=0
+  else
+    EVAL_RUN_EXIT_CODE=$?
+  fi
+}
 
 [[ -f "$SIF" ]] || die "SIF not found: $SIF"
 [[ -d "$OVERLAY_DIR/venv/vllm-min" ]] || die "overlay venv missing: $OVERLAY_DIR/venv/vllm-min"
@@ -797,6 +965,18 @@ fi
 if [[ "$JUDGE_USE_LORA_ADAPTER" == "1" && -d "$JUDGE_LORA_ADAPTER_PATH" ]]; then
   SING_BIND_ARGS+=(-B "$JUDGE_LORA_ADAPTER_PATH:$JUDGE_LORA_ADAPTER_PATH")
 fi
+if [[ -d "$MODEL" ]]; then
+  MODEL_BIND_PATH="$(readlink -f "$MODEL" 2>/dev/null || true)"
+  if [[ -n "$MODEL_BIND_PATH" && -d "$MODEL_BIND_PATH" && "$MODEL_BIND_PATH" != "$REPO_ROOT"* ]]; then
+    SING_BIND_ARGS+=(-B "$MODEL_BIND_PATH:$MODEL_BIND_PATH")
+  fi
+fi
+if [[ -d "$JUDGE_SERVER_MODEL" ]]; then
+  JUDGE_MODEL_BIND_PATH="$(readlink -f "$JUDGE_SERVER_MODEL" 2>/dev/null || true)"
+  if [[ -n "$JUDGE_MODEL_BIND_PATH" && -d "$JUDGE_MODEL_BIND_PATH" && "$JUDGE_MODEL_BIND_PATH" != "$REPO_ROOT"* ]]; then
+    SING_BIND_ARGS+=(-B "$JUDGE_MODEL_BIND_PATH:$JUDGE_MODEL_BIND_PATH")
+  fi
+fi
 if [[ -n "$DFM_EVALS_SUITES_FILE" ]]; then
   DFM_EVALS_SUITES_DIR="$(dirname "$DFM_EVALS_SUITES_FILE")"
   if [[ "$DFM_EVALS_SUITES_DIR" != "$REPO_ROOT"* ]]; then
@@ -831,8 +1011,12 @@ if [[ "$DFM_EVALS_MODEL" == vllm/* || "$DFM_EVALS_TARGET_MODEL" == vllm/* || "$D
     "$LORA_TOKENIZER_PATH" \
     "$TARGET_ENABLE_AUTO_TOOL_CHOICE" \
     "$TARGET_TOOL_CALL_PARSER" \
+    "$TARGET_REASONING_PARSER" \
+    "$TARGET_TOKENIZER_MODE" \
     "$TARGET_CHAT_TEMPLATE_KWARGS_JSON" \
     "$TARGET_ENFORCE_EAGER" \
+    "$TARGET_ATTENTION_BACKEND" \
+    "$TARGET_TOOL_PARSER_PLUGIN" \
     "$TARGET_SERVER_LOG" \
     "$TARGET_SERVER_CACHE_ROOT"
 fi
@@ -859,8 +1043,12 @@ if [[ "$JUDGE_SERVER_ENABLED" == "1" ]]; then
     "$JUDGE_LORA_TOKENIZER_PATH" \
     "$JUDGE_ENABLE_AUTO_TOOL_CHOICE" \
     "$JUDGE_TOOL_CALL_PARSER" \
+    "$JUDGE_REASONING_PARSER" \
+    "$JUDGE_TOKENIZER_MODE" \
     "$JUDGE_CHAT_TEMPLATE_KWARGS_JSON" \
     "$JUDGE_ENFORCE_EAGER" \
+    "$JUDGE_ATTENTION_BACKEND" \
+    "$JUDGE_TOOL_PARSER_PLUGIN" \
     "$JUDGE_SERVER_LOG" \
     "$JUDGE_SERVER_CACHE_ROOT"
 fi
@@ -896,7 +1084,11 @@ printf -v DFM_EVALS_XDG_CACHE_HOME_Q '%q' "$DFM_EVALS_XDG_CACHE_HOME"
 printf -v DFM_EVALS_XDG_DATA_HOME_Q '%q' "$DFM_EVALS_XDG_DATA_HOME"
 printf -v DFM_EVALS_TRITON_CACHE_DIR_Q '%q' "$DFM_EVALS_TRITON_CACHE_DIR"
 printf -v DFM_EVALS_TORCHINDUCTOR_CACHE_DIR_Q '%q' "$DFM_EVALS_TORCHINDUCTOR_CACHE_DIR"
+printf -v DFM_EVALS_RULER_QA_CACHE_Q '%q' "$DFM_EVALS_RULER_QA_CACHE"
+printf -v DFM_EVALS_RULER_QA_OFFLINE_Q '%q' "$DFM_EVALS_RULER_QA_OFFLINE"
 printf -v DFM_EVALS_MODAL_ENABLE_OUTPUT_Q '%q' "$DFM_EVALS_MODAL_ENABLE_OUTPUT"
+printf -v DFM_EVALS_MODAL_SANDBOX_TIMEOUT_Q '%q' "$DFM_EVALS_MODAL_SANDBOX_TIMEOUT"
+printf -v DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT_Q '%q' "$DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT"
 printf -v TARGET_VLLM_URL_Q '%q' "${TARGET_VLLM_URL:-}"
 printf -v TARGET_SERVER_API_KEY_Q '%q' "${TARGET_SERVER_API_KEY:-}"
 printf -v OPENAI_BASE_URL_Q '%q' "${OPENAI_BASE_URL:-}"
@@ -912,12 +1104,17 @@ export XDG_CACHE_HOME=${DFM_EVALS_XDG_CACHE_HOME_Q}
 export XDG_DATA_HOME=${DFM_EVALS_XDG_DATA_HOME_Q}
 export TRITON_CACHE_DIR=${DFM_EVALS_TRITON_CACHE_DIR_Q}
 export TORCHINDUCTOR_CACHE_DIR=${DFM_EVALS_TORCHINDUCTOR_CACHE_DIR_Q}
+export DFM_EVALS_RULER_QA_CACHE=${DFM_EVALS_RULER_QA_CACHE_Q}
+export DFM_EVALS_RULER_QA_OFFLINE=${DFM_EVALS_RULER_QA_OFFLINE_Q}
 export DFM_EVALS_MODAL_ENABLE_OUTPUT=${DFM_EVALS_MODAL_ENABLE_OUTPUT_Q}
+export DFM_EVALS_MODAL_SANDBOX_TIMEOUT=${DFM_EVALS_MODAL_SANDBOX_TIMEOUT_Q}
+export DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT=${DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT_Q}
 mkdir -p ${DFM_EVALS_CACHE_DIR_Q}
 mkdir -p ${DFM_EVALS_XDG_CACHE_HOME_Q}
 mkdir -p ${DFM_EVALS_XDG_DATA_HOME_Q}
 mkdir -p ${DFM_EVALS_TRITON_CACHE_DIR_Q}
 mkdir -p ${DFM_EVALS_TORCHINDUCTOR_CACHE_DIR_Q}
+mkdir -p ${DFM_EVALS_RULER_QA_CACHE_Q}
 mkdir -p ${DFM_EVALS_RUN_DIR_Q}
 mkdir -p ${DFM_EVALS_LOG_DIR_Q}
 if [[ -n ${TARGET_VLLM_URL_Q} ]]; then
@@ -968,8 +1165,12 @@ echo "Target GPU_MEM: $GPU_MEM"
 echo "Target visible devices: ${TARGET_VISIBLE_DEVICES:-<all>}"
 echo "Target auto tool choice: $TARGET_ENABLE_AUTO_TOOL_CHOICE"
 echo "Target tool call parser: ${TARGET_TOOL_CALL_PARSER:-<none>}"
+echo "Target tool parser plugin: ${TARGET_TOOL_PARSER_PLUGIN:-<none>}"
+echo "Target reasoning parser: ${TARGET_REASONING_PARSER:-<none>}"
+echo "Target tokenizer mode: ${TARGET_TOKENIZER_MODE:-<auto>}"
 echo "Target chat template kwargs: ${TARGET_CHAT_TEMPLATE_KWARGS_JSON:-<none>}"
 echo "Target enforce eager: $TARGET_ENFORCE_EAGER"
+echo "Target attention backend: ${TARGET_ATTENTION_BACKEND:-<auto>}"
 echo "Judge server enabled: $JUDGE_SERVER_ENABLED"
 if [[ "$JUDGE_SERVER_ENABLED" == "1" ]]; then
   echo "Judge server model: $JUDGE_SERVER_MODEL"
@@ -981,8 +1182,10 @@ if [[ "$JUDGE_SERVER_ENABLED" == "1" ]]; then
   echo "Judge visible devices: ${JUDGE_VISIBLE_DEVICES:-<all>}"
   echo "Judge auto tool choice: $JUDGE_ENABLE_AUTO_TOOL_CHOICE"
   echo "Judge tool call parser: ${JUDGE_TOOL_CALL_PARSER:-<none>}"
+  echo "Judge tool parser plugin: ${JUDGE_TOOL_PARSER_PLUGIN:-<none>}"
   echo "Judge chat template kwargs: ${JUDGE_CHAT_TEMPLATE_KWARGS_JSON:-<none>}"
   echo "Judge enforce eager: $JUDGE_ENFORCE_EAGER"
+  echo "Judge attention backend: ${JUDGE_ATTENTION_BACKEND:-<auto>}"
 fi
 echo "Target LoRA enabled: $USE_LORA_ADAPTER"
 if [[ "$USE_LORA_ADAPTER" == "1" ]]; then
@@ -1008,6 +1211,8 @@ echo "XDG cache home: $DFM_EVALS_XDG_CACHE_HOME"
 echo "XDG data home: $DFM_EVALS_XDG_DATA_HOME"
 echo "Triton cache dir: $DFM_EVALS_TRITON_CACHE_DIR"
 echo "TorchInductor cache dir: $DFM_EVALS_TORCHINDUCTOR_CACHE_DIR"
+echo "RULER QA cache: $DFM_EVALS_RULER_QA_CACHE"
+echo "RULER QA offline: $DFM_EVALS_RULER_QA_OFFLINE"
 echo "Run dir: $DFM_EVALS_RUN_DIR"
 echo "Log dir: $DFM_EVALS_LOG_DIR"
 echo "vLLM server log dir: $DFM_EVALS_SERVER_LOG_DIR"
@@ -1026,9 +1231,22 @@ echo "EEE source org: $DFM_EVALS_EEE_SOURCE_ORGANIZATION_NAME"
 echo "EEE evaluator relationship: $DFM_EVALS_EEE_EVALUATOR_RELATIONSHIP"
 fi
 echo "Modal enable output: $DFM_EVALS_MODAL_ENABLE_OUTPUT"
+echo "Modal sandbox timeout: ${DFM_EVALS_MODAL_SANDBOX_TIMEOUT:-<default>}"
+echo "Modal sandbox idle timeout: ${DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT:-<default>}"
+echo "Runner idle timeout: ${DFM_EVALS_RUNNER_IDLE_TIMEOUT:-<disabled>}"
+echo "Runner poll interval: ${DFM_EVALS_RUNNER_POLL_INTERVAL}s"
+echo "Runner kill grace: ${DFM_EVALS_RUNNER_KILL_GRACE}s"
+echo "Salvage partial results: $DFM_EVALS_SALVAGE_PARTIAL_RESULTS"
 
 echo "Running dfm-evals suite with externally managed vLLM backend(s)..."
-singularity exec "${SINGULARITY_GPU_ARGS[@]}" "${SING_BIND_ARGS[@]}" "$SIF" bash -lc "$RUN_CMD"
+run_eval_with_watchdog
+salvage_partial_results
+if [[ "$EVAL_RUN_EXIT_CODE" -ne 0 ]]; then
+  if [[ "$EVAL_RUN_STALLED" == "1" ]]; then
+    die "dfm-evals suite stalled and was terminated after ${DFM_EVALS_RUNNER_IDLE_TIMEOUT}s without progress"
+  fi
+  exit "$EVAL_RUN_EXIT_CODE"
+fi
 echo "dfm-evals suite complete."
 
 if [[ "$DFM_EVALS_EXPORT_EEE" == "1" ]]; then
@@ -1038,6 +1256,10 @@ if [[ "$DFM_EVALS_EXPORT_EEE" == "1" ]]; then
   DFM_EVALS_EEE_INFERENCE_ARGS=""
   if [[ -n "${OPENAI_BASE_URL:-}" ]]; then
     printf -v DFM_EVALS_EEE_INFERENCE_ARGS ' --inference-base-url %q' "$OPENAI_BASE_URL"
+  fi
+  if [[ -n "$DFM_EVALS_EEE_MODEL_ID" ]]; then
+    printf -v DFM_EVALS_EEE_MODEL_ID_ARG ' --model-id-override %q' "$DFM_EVALS_EEE_MODEL_ID"
+    DFM_EVALS_EEE_INFERENCE_ARGS+="$DFM_EVALS_EEE_MODEL_ID_ARG"
   fi
 
   EXPORT_EEE_CMD="$(render_env)

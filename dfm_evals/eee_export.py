@@ -375,6 +375,18 @@ def _parse_model_info(
     return _compact(model_info)
 
 
+def _apply_model_id_override(model_info: Mapping[str, Any], model_id_override: str | None) -> dict[str, Any]:
+    model_id = (model_id_override or "").strip()
+    if not model_id:
+        return dict(model_info)
+    developer, _ = _split_model_id(model_id)
+    updated = dict(model_info)
+    updated["name"] = model_id
+    updated["id"] = model_id
+    updated["developer"] = developer
+    return _compact(updated)
+
+
 def _infer_lower_is_better(metric_name: str) -> bool:
     lowered = metric_name.lower()
     return any(hint in lowered for hint in LOWER_IS_BETTER_HINTS)
@@ -1259,6 +1271,7 @@ def export_inspect_logs(
     eval_library_version: str | None = None,
     inference_base_url: str | None = None,
     inference_provider_name: str | None = None,
+    model_id_override: str | None = None,
 ) -> list[Path]:
     try:
         from inspect_ai.log import list_eval_logs, read_eval_log
@@ -1360,7 +1373,7 @@ def export_inspect_logs(
         inspect_version = str(packages.get("inspect_ai", "unknown"))
         library_version = eval_library_version or inspect_version
 
-        model_info = _parse_model_info(model_ref)
+        model_info = _apply_model_id_override(_parse_model_info(model_ref), model_id_override)
         resolved_inference_base_url = (
             inference_base_url or _extract_inspect_inference_base_url(eval_spec)
         )
@@ -1385,6 +1398,8 @@ def export_inspect_logs(
             )
         if lora_model_ref_inferred:
             generation_extra_details["model_ref_inferred_from_lora"] = "true"
+        if model_id_override:
+            generation_extra_details["model_id_override"] = model_id_override
         generation_config = _merge_generation_additional_details(
             generation_config,
             extra_details=generation_extra_details,
