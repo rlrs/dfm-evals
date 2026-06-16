@@ -46,6 +46,7 @@ def test_scorer_exports_follow_manifest() -> None:
 def test_discovered_task_modules_match_repo_layout() -> None:
     expected_subset = {
         "dfm_evals.tasks.bfcl.bfcl",
+        "dfm_evals.tasks.daisy",
         "dfm_evals.tasks.dala",
         "dfm_evals.tasks.danish_citizen_tests",
         "dfm_evals.tasks.gec_dala",
