@@ -25,6 +25,8 @@ OPTIONAL_IMPORT_DEPENDENCIES = {
 }
 MODAL_SANDBOX_TIMEOUT_ENV = "DFM_EVALS_MODAL_SANDBOX_TIMEOUT"
 MODAL_SANDBOX_IDLE_TIMEOUT_ENV = "DFM_EVALS_MODAL_SANDBOX_IDLE_TIMEOUT"
+OPENAI_CLIENT_TIMEOUT_ENV = "DFM_EVALS_CLIENT_TIMEOUT"
+OPENAI_CLIENT_MAX_RETRIES_ENV = "DFM_EVALS_CLIENT_MAX_RETRIES"
 
 
 @dataclass(frozen=True)
@@ -118,6 +120,72 @@ def _read_positive_int_env(name: str) -> int | None:
         raise ValueError(f"{name} must be a positive integer, got {value!r}.")
 
     return parsed
+
+
+def _read_nonnegative_int_env(name: str) -> int | None:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return None
+
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a non-negative integer, got {value!r}.") from exc
+
+    if parsed < 0:
+        raise ValueError(f"{name} must be a non-negative integer, got {value!r}.")
+
+    return parsed
+
+
+def _openai_httpx_timeout(timeout_seconds: int) -> object:
+    import httpx
+
+    return httpx.Timeout(
+        timeout=float(timeout_seconds),
+        connect=float(min(timeout_seconds, 60)),
+    )
+
+
+def _patch_openai_compatible_client_defaults() -> None:
+    timeout = _read_positive_int_env(OPENAI_CLIENT_TIMEOUT_ENV)
+    max_retries = _read_nonnegative_int_env(OPENAI_CLIENT_MAX_RETRIES_ENV)
+    if timeout is None and max_retries is None:
+        return
+
+    openai_module = importlib.import_module("inspect_ai.model._openai")
+    compat_module = importlib.import_module("inspect_ai.model._providers.openai_compatible")
+
+    http_client_cls = openai_module.OpenAIAsyncHttpxClient
+    original_http_client_init = http_client_cls.__init__
+    if not getattr(original_http_client_init, "__dfm_evals_patched__", False):
+
+        def patched_http_client_init(self: object, *args: object, **kwargs: object) -> None:
+            client_timeout = _read_positive_int_env(OPENAI_CLIENT_TIMEOUT_ENV)
+            if client_timeout is not None and "timeout" not in kwargs:
+                kwargs["timeout"] = _openai_httpx_timeout(client_timeout)
+            original_http_client_init(self, *args, **kwargs)
+
+        patched_http_client_init.__dfm_evals_patched__ = True
+        http_client_cls.__init__ = patched_http_client_init
+
+    api_cls = compat_module.OpenAICompatibleAPI
+    original_api_init = api_cls.__init__
+    if not getattr(original_api_init, "__dfm_evals_patched__", False):
+
+        def patched_api_init(self: object, *args: object, **kwargs: object) -> None:
+            client_timeout = _read_positive_int_env(OPENAI_CLIENT_TIMEOUT_ENV)
+            client_max_retries = _read_nonnegative_int_env(OPENAI_CLIENT_MAX_RETRIES_ENV)
+            if client_timeout is not None:
+                timeout_value = _openai_httpx_timeout(client_timeout)
+                kwargs.setdefault("timeout", timeout_value)
+                kwargs.setdefault("http_client", openai_module.OpenAIAsyncHttpxClient(timeout=timeout_value))
+            if client_max_retries is not None:
+                kwargs.setdefault("max_retries", client_max_retries)
+            original_api_init(self, *args, **kwargs)
+
+        patched_api_init.__dfm_evals_patched__ = True
+        api_cls.__init__ = patched_api_init
 
 
 def _load_modal_sandbox_overrides() -> dict[str, int]:
@@ -530,6 +598,7 @@ def _forward_to_inspect(args: Sequence[str], *, prog_name: str = "evals") -> int
     # Ensure local and optional third-party task registries are loaded.
     _ensure_registry_modules_loaded()
     _apply_model_info_overrides()
+    _patch_openai_compatible_client_defaults()
     from inspect_ai._cli.main import inspect as inspect_command
 
     forwarded = _normalize_remainder_args(args)

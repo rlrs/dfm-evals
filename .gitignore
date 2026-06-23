@@ -13,5 +13,8 @@ gorilla/
 overlay_vllm_minimal*/
 dfm-evals-vllm-suite-*.out
 dfm-evals-vllm-suite-*.err
+dfm-wmt24-comet-*.out
+dfm-wmt24-comet-*.err
+sitecustomize.py
 
 .vscode/

@@ -31,6 +31,7 @@ def ruler(
     shuffle: bool = False,
     limit: int | None = None,
     completion_tokens: int | None = None,
+    max_gen_toks: int | None = None,
     context_buffer_tokens: int = DEFAULT_CONTEXT_BUFFER_TOKENS,
 ) -> Task:
     if max_seq_length < 128:
@@ -43,6 +44,8 @@ def ruler(
         raise ValueError("`limit` must be >= 1 when provided.")
     if completion_tokens is not None and completion_tokens < 1:
         raise ValueError("`completion_tokens` must be >= 1 when provided.")
+    if max_gen_toks is not None and max_gen_toks < 1:
+        raise ValueError("`max_gen_toks` must be >= 1 when provided.")
     if context_buffer_tokens < 0:
         raise ValueError("`context_buffer_tokens` must be >= 0.")
 
@@ -68,13 +71,17 @@ def ruler(
     if limit is not None:
         samples = samples[:limit]
 
+    generate_kwargs = {}
+    if max_gen_toks is not None:
+        generate_kwargs["max_tokens"] = max_gen_toks
+
     return Task(
         dataset=MemoryDataset(
             samples=samples,
             name=f"RULER-{variant}",
             location=f"generated:{variant}",
         ),
-        solver=[generate(max_tokens=reserved_output_tokens)],
+        solver=[generate(**generate_kwargs)],
         scorer=ruler_scorer(),
     )
 

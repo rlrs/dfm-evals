@@ -34,6 +34,9 @@ SINGULARITY_GPU_MODE=${SINGULARITY_GPU_MODE:-$(dfm_lumi_default_gpu_mode "$SIF")
 MODEL=${MODEL:-Qwen/Qwen3.5-397B-A17B}
 SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-$MODEL}
 HF_HOME=${HF_HOME:-/scratch/project_465002183/.cache/huggingface}
+HF_HOME=${HF_HOME%/}
+mkdir -p "$HF_HOME"
+HF_HOME="$(readlink -f "$HF_HOME" 2>/dev/null || printf '%s' "$HF_HOME")"
 SLURM_JOB_ID_SAFE=${SLURM_JOB_ID:-manual}
 
 PORT=${PORT:-8000}
@@ -508,6 +511,7 @@ if [[ -e "$POST_ARTIFACT_ROOT" ]]; then
     SING_BIND_ARGS+=(-B "$POST_ARTIFACT_ROOT:$POST_ARTIFACT_ROOT")
   fi
 fi
+SING_BIND_ARGS+=(-B "$HF_HOME:$HF_HOME")
 if [[ -f "$RCCL_NET_SO_SRC" ]]; then
   SING_BIND_ARGS+=(
     -B "$RCCL_NET_SO_SRC:/lib/librccl-net.so"

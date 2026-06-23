@@ -8,16 +8,12 @@ sets:
           - refusal_judge={{judge_model}}
           - -T
           - semantic_judge={{judge_model}}
-          - --max-tokens
-          - "512"
       - name: inspect_evals/agentharm_benign
         args:
           - -T
           - refusal_judge={{judge_model}}
           - -T
           - semantic_judge={{judge_model}}
-          - --max-tokens
-          - "512"
       - name: inspect_evals/agentdojo
         args:
           - -T
@@ -36,43 +32,21 @@ sets:
   fundamentals:
     description: Broad inspect_evals fundamentals set
     tasks:
-      - name: inspect_evals/gsm8k
-        args:
-          - --max-tokens
-          - "2048"
-      - name: inspect_evals/ifeval
-        args:
-          - --max-tokens
-          - "3072"
-      - name: ifeval-da
-        args:
-          - --max-tokens
-          - "3072"
-      - name: inspect_evals/truthfulqa
-        args:
-          - --max-tokens
-          - "512"
+      - inspect_evals/gsm8k
+      - inspect_evals/ifeval
+      - ifeval-da
+      - inspect_evals/truthfulqa
       - name: generative-talemaader
         args:
           - -T
           - judge_model={{judge_model}}
-          - -T
-          - max_gen_toks=128
       - danish-citizen-tests
       - dala
       - gec_dala
-      - name: wmt24pp-en-da
-        args:
-          - -T
-          - max_gen_toks=512
-      - name: multi_wiki_qa
-        args:
-          - -T
-          - max_gen_toks=32
+      - wmt24pp-en-da
+      - multi_wiki_qa
       - name: inspect_evals/bfcl
         args:
-          - --max-tokens
-          - "1024"
           - --message-limit
           - "24"
       - name: ruler
@@ -88,6 +62,8 @@ sets:
           - -T
           - tokenizer_model={{target_model}}
           - -T
+          - completion_tokens=2048
+          - -T
           - context_buffer_tokens=256
       - name: ruler
         args:
@@ -101,6 +77,8 @@ sets:
           - tokenizer_backend=auto
           - -T
           - tokenizer_model={{target_model}}
+          - -T
+          - completion_tokens=4096
           - -T
           - context_buffer_tokens=256
       - name: ruler
@@ -116,6 +94,8 @@ sets:
           - -T
           - tokenizer_model={{target_model}}
           - -T
+          - completion_tokens=2048
+          - -T
           - context_buffer_tokens=256
       - name: ruler
         args:
@@ -130,6 +110,8 @@ sets:
           - -T
           - tokenizer_model={{target_model}}
           - -T
+          - completion_tokens=4096
+          - -T
           - context_buffer_tokens=256
     args:
       - --model
@@ -143,18 +125,9 @@ sets:
   final_all:
     description: Final combined benchmark suite for ~8B instruct models; English, code, and OpenThoughts-TBLite with no suite-level sample limit
     tasks:
-      - name: inspect_evals/gsm8k
-        args:
-          - --max-tokens
-          - "2048"
-      - name: inspect_evals/ifeval
-        args:
-          - --max-tokens
-          - "3072"
-      - name: inspect_evals/truthfulqa
-        args:
-          - --max-tokens
-          - "512"
+      - inspect_evals/gsm8k
+      - inspect_evals/ifeval
+      - inspect_evals/truthfulqa
       - inspect_evals/mmlu_0_shot
       - inspect_evals/mmlu_pro
       - inspect_evals/arc_easy
@@ -171,25 +144,21 @@ sets:
           - -T
           - tokenizer_model={{target_model}}
           - -T
+          - completion_tokens=4096
+          - -T
           - context_buffer_tokens=256
       - name: inspect_evals/bfcl
         args:
-          - --max-tokens
-          - "1024"
           - --message-limit
           - "24"
       - name: inspect_evals/humaneval
         args:
           - -T
           - sandbox=modal
-          - --max-tokens
-          - "2048"
-      - name: mbpp_modal
+      - name: inspect_evals/mbpp
         args:
-          - -T
-          - sandbox=modal
-          - --max-tokens
-          - "2048"
+          - --sandbox
+          - daytona
       - name: inspect_harbor/openthoughts_tblite
         args:
           - -T
@@ -206,18 +175,9 @@ sets:
   final_english_core:
     description: Final benchmark English/general tasks; no suite-level sample limit
     tasks:
-      - name: inspect_evals/gsm8k
-        args:
-          - --max-tokens
-          - "2048"
-      - name: inspect_evals/ifeval
-        args:
-          - --max-tokens
-          - "3072"
-      - name: inspect_evals/truthfulqa
-        args:
-          - --max-tokens
-          - "512"
+      - inspect_evals/gsm8k
+      - inspect_evals/ifeval
+      - inspect_evals/truthfulqa
       - inspect_evals/mmlu_0_shot
       - inspect_evals/mmlu_pro
       - inspect_evals/arc_easy
@@ -225,8 +185,6 @@ sets:
       - inspect_evals/hellaswag
       - name: inspect_evals/bfcl
         args:
-          - --max-tokens
-          - "1024"
           - --message-limit
           - "24"
     args:
@@ -235,20 +193,28 @@ sets:
       - --temperature
       - "0"
   final_code_8b:
-    description: Final benchmark code suite for ~8B instruct models; Modal sandbox-scored and no suite-level sample limit
+    description: Final benchmark code suite for ~8B instruct models; sandbox-scored and no suite-level sample limit
     tasks:
       - name: inspect_evals/humaneval
         args:
           - -T
           - sandbox=modal
-          - --max-tokens
-          - "2048"
-      - name: mbpp_modal
+      - name: inspect_evals/mbpp
         args:
-          - -T
-          - sandbox=modal
-          - --max-tokens
-          - "2048"
+          - --sandbox
+          - daytona
+    args:
+      - --model
+      - "{{target_model}}"
+      - --temperature
+      - "0"
+  mbpp_daytona:
+    description: Upstream Inspect MBPP with Daytona sandbox execution
+    tasks:
+      - name: inspect_evals/mbpp
+        args:
+          - --sandbox
+          - daytona
     args:
       - --model
       - "{{target_model}}"
@@ -275,8 +241,6 @@ sets:
     tasks:
       - name: inspect_evals/bfcl
         args:
-          - --max-tokens
-          - "1024"
           - --message-limit
           - "24"
     args:
@@ -291,10 +255,7 @@ sets:
   wmt24pp_en_da:
     description: WMT24++ English-to-Danish translation task
     tasks:
-      - name: wmt24pp-en-da
-        args:
-          - -T
-          - max_gen_toks=512
+      - wmt24pp-en-da
     args:
       - --model
       - "{{target_model}}"
@@ -316,6 +277,8 @@ sets:
           - -T
           - tokenizer_model={{target_model}}
           - -T
+          - completion_tokens=2048
+          - -T
           - context_buffer_tokens=256
       - name: ruler
         args:
@@ -329,6 +292,8 @@ sets:
           - tokenizer_backend=auto
           - -T
           - tokenizer_model={{target_model}}
+          - -T
+          - completion_tokens=4096
           - -T
           - context_buffer_tokens=256
       - name: ruler
@@ -344,6 +309,8 @@ sets:
           - -T
           - tokenizer_model={{target_model}}
           - -T
+          - completion_tokens=2048
+          - -T
           - context_buffer_tokens=256
       - name: ruler
         args:
@@ -357,6 +324,8 @@ sets:
           - tokenizer_backend=auto
           - -T
           - tokenizer_model={{target_model}}
+          - -T
+          - completion_tokens=4096
           - -T
           - context_buffer_tokens=256
     args:

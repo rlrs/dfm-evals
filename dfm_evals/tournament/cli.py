@@ -1,46 +1,6 @@
 import argparse
 from typing import Any, Callable, Sequence, TypeVar
 
-from ._cli_format import (
-    add_models_result_payload,
-    export_result_payload,
-    format_prompt_responses_export_result,
-    format_add_models_result,
-    format_export_result,
-    format_generation_result,
-    format_register_models_result,
-    format_run_result,
-    format_status,
-    format_update_config_result,
-    format_view_export_result,
-    generation_result_payload,
-    register_models_result_payload,
-    run_result_payload,
-    status_payload,
-    prompt_responses_export_result_payload,
-    update_config_result_payload,
-    view_export_result_payload,
-    write_json_output,
-)
-from .exports import export_prompt_responses, export_rankings
-from .generation import run_generation
-from .orchestrator import (
-    add_models,
-    register_models,
-    resume_tournament,
-    run_tournament,
-    tournament_status,
-    update_tournament_config,
-)
-from .store import initialize_tournament_store
-from .viewer import (
-    export_tournament_view_html,
-    format_tournament_view_runs,
-    list_tournament_view_runs,
-    resolve_tournament_view_target,
-    serve_tournament_view,
-)
-
 ResultT = TypeVar("ResultT")
 
 
@@ -49,11 +9,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.command == "init":
+        from .store import initialize_tournament_store
+
         db_path = initialize_tournament_store(args.config)
         print(db_path)
         return 0
 
     if args.command == "generate":
+        from ._cli_format import format_generation_result, generation_result_payload
+        from .generation import run_generation
+
         models = args.models if args.models else None
         return _emit_result(
             run_generation(args.config, models=models),
@@ -63,6 +28,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "run":
+        from ._cli_format import format_run_result, run_result_payload
+        from .orchestrator import run_tournament
+
         return _emit_result(
             run_tournament(args.config, max_batches=args.max_batches),
             payload_fn=run_result_payload,
@@ -71,6 +39,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "resume":
+        from ._cli_format import format_run_result, run_result_payload
+        from .orchestrator import resume_tournament
+
         return _emit_result(
             resume_tournament(args.target, max_batches=args.max_batches),
             payload_fn=run_result_payload,
@@ -79,6 +50,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "add-model":
+        from ._cli_format import add_models_result_payload, format_add_models_result
+        from .orchestrator import add_models
+
         return _emit_result(
             add_models(
                 args.target,
@@ -91,6 +65,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "register-model":
+        from ._cli_format import format_register_models_result, register_models_result_payload
+        from .orchestrator import register_models
+
         return _emit_result(
             register_models(
                 args.target,
@@ -102,6 +79,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "update-config":
+        from ._cli_format import format_update_config_result, update_config_result_payload
+        from .orchestrator import update_tournament_config
+
         return _emit_result(
             update_tournament_config(
                 args.target,
@@ -113,6 +93,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "status":
+        from ._cli_format import format_status, status_payload
+        from .orchestrator import tournament_status
+
         return _emit_result(
             tournament_status(args.target),
             payload_fn=status_payload,
@@ -121,6 +104,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "export":
+        from ._cli_format import export_result_payload, format_export_result
+        from .exports import export_rankings
+
         return _emit_result(
             export_rankings(args.target, output_dir=args.output_dir),
             payload_fn=export_result_payload,
@@ -129,6 +115,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "export-prompts":
+        from ._cli_format import (
+            format_prompt_responses_export_result,
+            prompt_responses_export_result_payload,
+        )
+        from .exports import export_prompt_responses
+
         return _emit_result(
             export_prompt_responses(args.target, output_path=args.output),
             payload_fn=prompt_responses_export_result_payload,
@@ -137,6 +129,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "export-html":
+        from ._cli_format import format_view_export_result, view_export_result_payload
+        from .viewer import export_tournament_view_html
+
         return _emit_result(
             export_tournament_view_html(args.target, output_path=args.output),
             payload_fn=view_export_result_payload,
@@ -145,6 +140,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "view":
+        from .viewer import (
+            format_tournament_view_runs,
+            list_tournament_view_runs,
+            resolve_tournament_view_target,
+            serve_tournament_view,
+        )
+
         if args.list_runs:
             print(
                 format_tournament_view_runs(
@@ -182,6 +184,8 @@ def _emit_result(
     formatter_fn: Callable[[ResultT], str],
     json_out: str | None,
 ) -> int:
+    from ._cli_format import write_json_output
+
     payload = payload_fn(result)
     output_path = write_json_output(payload, json_out)
     print(formatter_fn(result))

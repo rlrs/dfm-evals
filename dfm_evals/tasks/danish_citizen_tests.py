@@ -25,7 +25,7 @@ from inspect_ai.solver import TaskState, generate
 
 DEFAULT_DATASET_ID = "alexandrainst/danish-citizen-tests-updated"
 DEFAULT_SPLIT = "test"
-DEFAULT_MAX_GEN_TOKS = 8
+DEFAULT_MAX_GEN_TOKS: int | None = None
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_TEST_SIZE = 512
 DEFAULT_VAL_SIZE = 64
@@ -48,7 +48,7 @@ def danish_citizen_tests(
     dataset_id: str = DEFAULT_DATASET_ID,
     split: str = DEFAULT_SPLIT,
     prompt_template: str = DEFAULT_PROMPT_TEMPLATE,
-    max_gen_toks: int = DEFAULT_MAX_GEN_TOKS,
+    max_gen_toks: int | None = DEFAULT_MAX_GEN_TOKS,
     temperature: float = DEFAULT_TEMPERATURE,
     shuffle: bool = False,
     seed: int | None = None,
@@ -58,7 +58,7 @@ def danish_citizen_tests(
     # Exporters can read this from recorded task_args to override display defaults.
     _ = preferred_metric
 
-    if max_gen_toks < 1:
+    if max_gen_toks is not None and max_gen_toks < 1:
         raise ValueError("`max_gen_toks` must be >= 1.")
 
     normalized_split = _normalize_split_name(split)
@@ -71,13 +71,17 @@ def danish_citizen_tests(
     if limit is not None:
         samples = samples[:limit]
 
+    generate_kwargs: dict[str, Any] = {"temperature": temperature}
+    if max_gen_toks is not None:
+        generate_kwargs["max_tokens"] = max_gen_toks
+
     return Task(
         dataset=MemoryDataset(
             samples=samples,
             name="Danish Citizen Tests",
             location=dataset_id,
         ),
-        solver=[generate(max_tokens=max_gen_toks, temperature=temperature)],
+        solver=[generate(**generate_kwargs)],
         scorer=danish_citizen_tests_scorer(),
     )
 

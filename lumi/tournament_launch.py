@@ -16,8 +16,6 @@ from dfm_evals.tournament._definitions import (
 )
 from dfm_evals.tournament._resolve import resolve_stateful_tournament_config
 from dfm_evals.tournament.config import TournamentConfig, load_tournament_config
-from dfm_evals.tournament.indexer import index_generation_responses
-from dfm_evals.tournament.orchestrator import tournament_status
 
 LOCAL_VLLM = "local_vllm"
 EXTERNAL_OPENAI = "external_openai"
@@ -351,6 +349,9 @@ def emit_status_shell(
     stateful: bool = False,
     index_generation: bool = False,
 ) -> str:
+    from dfm_evals.tournament.indexer import index_generation_responses
+    from dfm_evals.tournament.orchestrator import tournament_status
+
     config = _load_config(source, stateful=stateful)
     missing_models: list[str] = []
     if index_generation:
@@ -406,6 +407,8 @@ def emit_resource_shell(
                 _resolve_contestant_entries(config, launch_map, explicit_models)
             )
         else:
+            from dfm_evals.tournament.indexer import index_generation_responses
+
             report = index_generation_responses(config)
             missing_models = sorted(
                 model_name

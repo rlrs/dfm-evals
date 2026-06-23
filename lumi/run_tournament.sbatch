@@ -52,6 +52,9 @@ DFM_EVALS_EEE_EVALUATOR_RELATIONSHIP=${DFM_EVALS_EEE_EVALUATOR_RELATIONSHIP:-thi
 SERVER_START_TIMEOUT=${SERVER_START_TIMEOUT:-900}
 SERVER_START_STEP=${SERVER_START_STEP:-5}
 HF_HOME=${HF_HOME:-/scratch/project_465002183/.cache/huggingface}
+HF_HOME=${HF_HOME%/}
+mkdir -p "$HF_HOME"
+HF_HOME="$(readlink -f "$HF_HOME" 2>/dev/null || printf '%s' "$HF_HOME")"
 LORA_MAX_RANK_OVERRIDE=${LORA_MAX_RANK_OVERRIDE:-}
 MASTER_ADDR=${MASTER_ADDR:-}
 MASTER_PORT=${MASTER_PORT:-29501}
@@ -263,7 +266,6 @@ else
   export PYTHONPATH=/overlay/src/transformers/src:/overlay/src/vllm:${OVERLAY_SITE}${PYTHONPATH:+:$PYTHONPATH}
 fi
 unset SSL_CERT_FILE REQUESTS_CA_BUNDLE CURL_CA_BUNDLE
-export TORCHDYNAMO_DISABLE=1
 if [[ -n "${ROCR_VISIBLE_DEVICES:-}" && -z "${HIP_VISIBLE_DEVICES:-}" ]]; then
   export HIP_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES}"
 fi
@@ -354,6 +356,7 @@ init_singularity_binds() {
       BOUND_PATHS+=("$POST_ARTIFACT_ROOT")
     fi
   fi
+  append_bind_path "$HF_HOME"
   if [[ -f "$RCCL_NET_SO_SRC" ]]; then
     SING_BIND_ARGS+=(
       -B "$RCCL_NET_SO_SRC:/lib/librccl-net.so"
@@ -695,7 +698,8 @@ start_vllm_server_from_spec() {
   server_cmd="$(render_env)
 export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 export VLLM_PLUGINS=''
-export TORCHDYNAMO_DISABLE=1
+echo \"vllm executable: \$(command -v vllm)\"
+/opt/venv/bin/python -c 'import importlib.metadata as md; print(\"runtime vllm=\" + md.version(\"vllm\")); print(\"runtime torch=\" + md.version(\"torch\")); print(\"runtime triton=\" + md.version(\"triton\"))'
 ${extra_env_exports}export NODE_RANK=\${SLURM_PROCID:-0}
 if [[ -n \"\${VISIBLE_DEVICES:-}\" ]]; then
   export HIP_VISIBLE_DEVICES=\"\${VISIBLE_DEVICES}\"
@@ -1384,6 +1388,7 @@ echo "Allocated nodes: ${NODES[*]}"
 echo "Head node: $HEAD_NODE"
 echo "MASTER_ADDR: $MASTER_ADDR"
 echo "MASTER_PORT: $MASTER_PORT"
+echo "HF_HOME: $HF_HOME"
 if [[ -n "$CONFIG" ]]; then
   echo "Config: $CONFIG"
 fi

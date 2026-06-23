@@ -41,6 +41,9 @@ GPU_MEM=${GPU_MEM:-0.92}
 TARGET_PORT=${TARGET_PORT:-8000}
 TARGET_VISIBLE_DEVICES=${TARGET_VISIBLE_DEVICES:-}
 MAX_CONNECTIONS=${MAX_CONNECTIONS:-128}
+MAX_TASKS=${MAX_TASKS:-4}
+DFM_EVALS_CLIENT_TIMEOUT=${DFM_EVALS_CLIENT_TIMEOUT:-7200}
+DFM_EVALS_CLIENT_MAX_RETRIES=${DFM_EVALS_CLIENT_MAX_RETRIES:-0}
 TARGET_ENABLE_AUTO_TOOL_CHOICE=${TARGET_ENABLE_AUTO_TOOL_CHOICE:-1}
 TARGET_TOOL_CALL_PARSER=${TARGET_TOOL_CALL_PARSER:-hermes}
 TARGET_TOOL_PARSER_PLUGIN=${TARGET_TOOL_PARSER_PLUGIN:-}
@@ -113,6 +116,9 @@ Options:
   --judge-gpu-mem <f>        Judge server GPU memory utilization (default: 0.85)
   --judge-devices <csv>      Judge HIP/CUDA visible devices (default: all)
   --max-connections <n>      Concurrency for inspect eval (default: 128)
+  --max-tasks <n>            Max inspect tasks to run concurrently (default: 4)
+  --client-timeout <seconds> OpenAI-compatible HTTP timeout for target model calls (default: 7200)
+  --client-max-retries <n>   Native OpenAI-compatible client retries (default: 0)
   --target-enable-auto-tool-choice   Enable target vLLM --enable-auto-tool-choice (default)
   --target-disable-auto-tool-choice  Disable target vLLM --enable-auto-tool-choice
   --target-tool-call-parser <name>   Target vLLM --tool-call-parser (default: hermes; use 'none' to unset)
@@ -346,6 +352,21 @@ while [[ $# -gt 0 ]]; do
     --max-connections)
       need_value "$1" "$#"
       MAX_CONNECTIONS="$2"
+      shift 2
+      ;;
+    --max-tasks)
+      need_value "$1" "$#"
+      MAX_TASKS="$2"
+      shift 2
+      ;;
+    --client-timeout)
+      need_value "$1" "$#"
+      DFM_EVALS_CLIENT_TIMEOUT="$2"
+      shift 2
+      ;;
+    --client-max-retries)
+      need_value "$1" "$#"
+      DFM_EVALS_CLIENT_MAX_RETRIES="$2"
       shift 2
       ;;
     --target-enable-auto-tool-choice)
@@ -641,6 +662,9 @@ env_kv=(
   "GPU_MEM=$GPU_MEM"
   "TARGET_PORT=$TARGET_PORT"
   "MAX_CONNECTIONS=$MAX_CONNECTIONS"
+  "MAX_TASKS=$MAX_TASKS"
+  "DFM_EVALS_CLIENT_TIMEOUT=$DFM_EVALS_CLIENT_TIMEOUT"
+  "DFM_EVALS_CLIENT_MAX_RETRIES=$DFM_EVALS_CLIENT_MAX_RETRIES"
   "TARGET_ENABLE_AUTO_TOOL_CHOICE=$TARGET_ENABLE_AUTO_TOOL_CHOICE"
   "TARGET_TOOL_CALL_PARSER=$TARGET_TOOL_CALL_PARSER"
   "TARGET_TOOL_PARSER_PLUGIN=$TARGET_TOOL_PARSER_PLUGIN"
@@ -718,6 +742,9 @@ echo "GPU_MEM: $GPU_MEM"
 echo "Target port: $TARGET_PORT"
 echo "Target devices: ${TARGET_VISIBLE_DEVICES:-<all>}"
 echo "Max connections: $MAX_CONNECTIONS"
+echo "Max tasks: $MAX_TASKS"
+echo "Client timeout: $DFM_EVALS_CLIENT_TIMEOUT"
+echo "Client max retries: $DFM_EVALS_CLIENT_MAX_RETRIES"
 echo "Target auto tool choice: $TARGET_ENABLE_AUTO_TOOL_CHOICE"
 echo "Target tool call parser: ${TARGET_TOOL_CALL_PARSER:-<none>}"
 echo "Target tool parser plugin: ${TARGET_TOOL_PARSER_PLUGIN:-<none>}"

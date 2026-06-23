@@ -1,0 +1,63 @@
+run_dir: ../../../logs/evals-logs/tournament-creative-writing-da-munin-baselines
+project_id: tournament-creative-writing-da-munin-baselines
+
+contestant_models:
+  - vllm/danish-foundation-models/munin-qwen3.5-9B
+  - vllm/danish-foundation-models/munin-ministral3-8B
+  - vllm/danish-foundation-models/munin-apertus-8b
+  - vllm/Qwen/Qwen3.5-9B
+  - vllm/swiss-ai/Apertus-8B-Instruct-2509
+  - vllm/mistralai/Ministral-3-8B-Instruct-2512
+
+prompt_source:
+  path: ../data/creative_writing_da_small.jsonl
+  format: jsonl
+  id_template: creative-writing-da-{id:02d}
+  text_field: prompt
+  metadata_fields:
+    - title
+    - category
+  static_metadata:
+    source_file: creative_writing_da_small.jsonl
+
+contestant_generate_config:
+  temperature: 0.6
+  max_tokens: 768
+
+batch_size: 8
+max_total_matches: 96
+p_stop: 0.995
+epsilon: 0.15
+min_pair_matches: 8
+max_pair_matches: 16
+max_prompt_uses_per_pair: 4
+n_stable_batches: 4
+seed: 42
+
+judge_model: openai/qwen3.5-397b
+judge_max_samples: 12
+judge_generate_config:
+  temperature: 0.0
+  max_tokens: 512
+judge_prompt_template: |
+  You are evaluating two answers to the same Danish creative-writing prompt.
+
+  Prioritize language quality first: grammatical correctness, idiomatic Danish, sentence structure, flow, clarity, lexical choice, and whether the writing sounds natural and well-composed. Also evaluate prompt adherence, genre fit, completeness, coherence, creativity, and overall usefulness. Penalize awkward grammar, clumsy sentence construction, repetition, or unnatural phrasing even when the response broadly follows the prompt.
+
+  User prompt:
+  {prompt}
+
+  Response A:
+  {response_a}
+
+  Response B:
+  {response_b}
+
+  Compare the responses directly. Explain which answer shows stronger Danish writing quality and why, while also noting prompt adherence and genre execution. If both are genuinely indistinguishable in overall quality, choose TIE.
+
+  Reply with exactly two lines.
+  Line 1 must start with `REASON:` and contain 2-4 short sentences.
+  Line 2 must be exactly one of: `DECISION: A`, `DECISION: B`, or `DECISION: TIE`.
+side_swap: true
+
+invalid_policy: skip

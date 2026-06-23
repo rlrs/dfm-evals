@@ -79,6 +79,9 @@ DP=${DP:-1}
 CTX=${CTX:-}
 GPU_MEM=${GPU_MEM:-0.92}
 MAX_CONNECTIONS=${MAX_CONNECTIONS:-128}
+MAX_TASKS=${MAX_TASKS:-4}
+DFM_EVALS_CLIENT_TIMEOUT=${DFM_EVALS_CLIENT_TIMEOUT:-7200}
+DFM_EVALS_CLIENT_MAX_RETRIES=${DFM_EVALS_CLIENT_MAX_RETRIES:-0}
 TARGET_PORT=${TARGET_PORT:-8000}
 TARGET_VISIBLE_DEVICES=${TARGET_VISIBLE_DEVICES:-}
 TARGET_ENABLE_AUTO_TOOL_CHOICE=${TARGET_ENABLE_AUTO_TOOL_CHOICE:-1}
@@ -626,6 +629,9 @@ build_evals_cli() {
     --model "$DFM_EVALS_MODEL"
     --temperature "$DFM_EVALS_TEMPERATURE"
     --max-connections "$MAX_CONNECTIONS"
+    --max-tasks "$MAX_TASKS"
+    -M "timeout=$DFM_EVALS_CLIENT_TIMEOUT"
+    -M "max_retries=$DFM_EVALS_CLIENT_MAX_RETRIES"
   )
   if [[ -n "${DFM_EVALS_LIMIT:-}" ]]; then
     evals_args+=(--limit "$DFM_EVALS_LIMIT")
@@ -1156,6 +1162,9 @@ echo "Suites file: ${DFM_EVALS_SUITES_FILE:-<packaged default>}"
 echo "Limit: $DFM_EVALS_LIMIT"
 echo "Temperature: $DFM_EVALS_TEMPERATURE"
 echo "MAX_CONNECTIONS: $MAX_CONNECTIONS"
+echo "MAX_TASKS: $MAX_TASKS"
+echo "Client timeout: $DFM_EVALS_CLIENT_TIMEOUT"
+echo "Client max retries: $DFM_EVALS_CLIENT_MAX_RETRIES"
 echo "Target server model tag: $TARGET_SERVER_MODEL_TAG"
 echo "Target served model name: $TARGET_SERVER_SERVED_MODEL_NAME"
 echo "Target URL: ${TARGET_VLLM_URL:-<none>}"

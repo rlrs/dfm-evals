@@ -85,15 +85,22 @@ def test_packaged_fundamentals_include_short_ruler_lengths() -> None:
     ruler_tasks = [task for task in suite.tasks if task.name == "ruler"]
 
     assert [(task.name, task.args) for task in ifeval_tasks] == [
-        ("inspect_evals/ifeval", ["--max-tokens", "3072"]),
-        ("ifeval-da", ["--max-tokens", "3072"]),
+        ("inspect_evals/ifeval", []),
+        ("ifeval-da", []),
     ]
+    assert all("--max-tokens" not in task.args for task in suite.tasks)
     assert len(ruler_tasks) == 4
     assert sorted(task.args[5] for task in ruler_tasks) == [
         "max_seq_length=32768",
         "max_seq_length=32768",
         "max_seq_length=8192",
         "max_seq_length=8192",
+    ]
+    assert sorted(arg for task in ruler_tasks for arg in task.args if arg.startswith("completion_tokens=")) == [
+        "completion_tokens=2048",
+        "completion_tokens=2048",
+        "completion_tokens=4096",
+        "completion_tokens=4096",
     ]
     assert all("tokenizer_backend=auto" in task.args for task in ruler_tasks)
     assert all("tokenizer_model={{target_model}}" in task.args for task in ruler_tasks)
@@ -106,9 +113,7 @@ def test_packaged_fundamentals_include_wmt24pp_translation() -> None:
     suite = suites["fundamentals"]
     wmt24pp_tasks = [task for task in suite.tasks if task.name == "wmt24pp-en-da"]
 
-    assert [(task.name, task.args) for task in wmt24pp_tasks] == [
-        ("wmt24pp-en-da", ["-T", "max_gen_toks=512"]),
-    ]
+    assert [(task.name, task.args) for task in wmt24pp_tasks] == [("wmt24pp-en-da", [])]
 
 
 def test_packaged_suites_include_wmt24pp_translation_suite() -> None:
@@ -116,9 +121,7 @@ def test_packaged_suites_include_wmt24pp_translation_suite() -> None:
 
     suite = suites["wmt24pp_en_da"]
 
-    assert [(task.name, task.args) for task in suite.tasks] == [
-        ("wmt24pp-en-da", ["-T", "max_gen_toks=512"]),
-    ]
+    assert [(task.name, task.args) for task in suite.tasks] == [("wmt24pp-en-da", [])]
     assert suite.args == [
         "--model",
         "{{target_model}}",
@@ -188,6 +191,46 @@ def test_optional_registry_import_still_propagates_other_missing_dependencies(
 
     with pytest.raises(ModuleNotFoundError, match="docker"):
         cli._ensure_registry_modules_loaded()
+
+
+def test_patch_openai_compatible_client_defaults_injects_client_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeHttpxClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+    class FakeOpenAICompatibleAPI:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+    fake_openai_module = SimpleNamespace(OpenAIAsyncHttpxClient=FakeHttpxClient)
+    fake_compat_module = SimpleNamespace(OpenAICompatibleAPI=FakeOpenAICompatibleAPI)
+    original_import_module = cli.importlib.import_module
+
+    def fake_import_module(name: str) -> object:
+        if name == "inspect_ai.model._openai":
+            return fake_openai_module
+        if name == "inspect_ai.model._providers.openai_compatible":
+            return fake_compat_module
+        return original_import_module(name)
+
+    monkeypatch.setattr(cli.importlib, "import_module", fake_import_module)
+    monkeypatch.setenv(cli.OPENAI_CLIENT_TIMEOUT_ENV, "7200")
+    monkeypatch.setenv(cli.OPENAI_CLIENT_MAX_RETRIES_ENV, "0")
+
+    cli._patch_openai_compatible_client_defaults()
+
+    http_client = FakeHttpxClient()
+    api = FakeOpenAICompatibleAPI("vllm/test")
+
+    assert http_client.kwargs["timeout"].read == 7200.0
+    assert http_client.kwargs["timeout"].connect == 60.0
+    assert api.kwargs["timeout"].read == 7200.0
+    assert api.kwargs["max_retries"] == 0
+    assert api.kwargs["http_client"].kwargs["timeout"].read == 7200.0
 
 
 def test_patch_inspect_sandboxes_modal_context_dir_uses_build_context(

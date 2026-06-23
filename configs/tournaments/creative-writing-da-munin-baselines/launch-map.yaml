@@ -1,0 +1,49 @@
+defaults:
+  tp: 8
+  pp: 1
+  dp: 1
+  ctx: 8192
+  gpu_mem: 0.9
+
+contestants:
+  vllm/danish-foundation-models/munin-qwen3.5-9B:
+    mode: local_vllm
+    model: danish-foundation-models/munin-qwen3.5-9B
+    default_chat_template_kwargs:
+      enable_thinking: false
+  vllm/danish-foundation-models/munin-ministral3-8B:
+    mode: local_vllm
+    model: danish-foundation-models/munin-ministral3-8B
+    default_chat_template_kwargs:
+      reasoning_effort: none
+    extra_vllm_args:
+      - --tokenizer-mode
+      - mistral
+      - --reasoning-parser
+      - mistral
+  vllm/danish-foundation-models/munin-apertus-8b:
+    mode: local_vllm
+    model: danish-foundation-models/munin-apertus-8b
+  vllm/Qwen/Qwen3.5-9B:
+    mode: local_vllm
+    model: Qwen/Qwen3.5-9B
+    default_chat_template_kwargs:
+      enable_thinking: false
+  vllm/swiss-ai/Apertus-8B-Instruct-2509:
+    mode: local_vllm
+    model: swiss-ai/Apertus-8B-Instruct-2509
+  vllm/mistralai/Ministral-3-8B-Instruct-2512:
+    mode: local_vllm
+    model: mistralai/Ministral-3-8B-Instruct-2512
+    default_chat_template_kwargs:
+      reasoning_effort: none
+    extra_vllm_args:
+      - --tokenizer-mode
+      - mistral
+      - --reasoning-parser
+      - mistral
+
+judge:
+  mode: external_openai
+  base_url_env: OPENAI_BASE_URL
+  api_key_env: OPENAI_API_KEY
