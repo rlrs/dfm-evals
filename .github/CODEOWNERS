@@ -26,9 +26,12 @@
 
 /dfm_evals/tasks/__init__.py @rlrs
 /dfm_evals/tasks/bfcl/ @rlrs
+/dfm_evals/tasks/daisy.py @rlrs
 /dfm_evals/tasks/dala.py @rlrs
 /dfm_evals/tasks/danish_citizen_tests.py @rlrs
+/dfm_evals/tasks/gec_dala.py @rlrs
 /dfm_evals/tasks/ifeval_da.py @rlrs
+/dfm_evals/tasks/mbpp_modal.py @rlrs
 /dfm_evals/tasks/multi_wiki_qa.py @rlrs
 /dfm_evals/tasks/piqa.py @rlrs
 /dfm_evals/tasks/piqa/ @rlrs
@@ -39,8 +42,10 @@
 /tests/test_artifact_root_defaults.py @rlrs
 /tests/test_bfcl.py @rlrs
 /tests/test_cli.py @rlrs
+/tests/test_daisy.py @rlrs
 /tests/test_dala.py @rlrs
 /tests/test_danish_citizen_tests.py @rlrs
+/tests/test_gec_dala.py @rlrs
 /tests/test_gleu.py @rlrs
 /tests/test_hf_eval_yaml.py @rlrs
 /tests/test_ifeval_da.py @rlrs
@@ -49,6 +54,7 @@
 /tests/test_registry.py @rlrs
 /tests/test_results_table.py @rlrs
 /tests/test_ruler.py @rlrs
+/tests/test_salvage_eval.py @rlrs
 /tests/test_tournament_add_models.py @rlrs
 /tests/test_tournament_config.py @rlrs
 /tests/test_tournament_eee_export.py @rlrs
@@ -60,4 +66,5 @@
 /tests/test_tournament_side_swap.py @rlrs
 /tests/test_tournament_view.py @rlrs
 /tests/test_upcast_modelopt_checkpoint_to_bf16.py @rlrs
+/tests/test_view_script.py @rlrs
 /tests/test_vllm_patches.py @rlrs
