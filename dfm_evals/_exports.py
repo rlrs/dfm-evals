@@ -6,6 +6,7 @@ from pathlib import Path
 REGISTRY_EXPORTS = {
     "danish_citizen_tests": "dfm_evals.tasks.danish_citizen_tests:danish_citizen_tests",
     "daisy": "dfm_evals.tasks.daisy:daisy",
+    "daisy_lookup": "dfm_evals.tasks.daisy_lookup:daisy_lookup",
     "generative_talemaader": "dfm_evals.tasks.talemaader.task:generative_talemaader",
     "multi_wiki_qa": "dfm_evals.tasks.multi_wiki_qa:multi_wiki_qa",
     "dala": "dfm_evals.tasks.dala:dala",
